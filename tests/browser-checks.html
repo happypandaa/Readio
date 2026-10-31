@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Readio 隔离数据集成自查</title>
+<style>
+  body { max-width: 1000px; margin: 32px auto; padding: 0 24px; font: 15px/1.65 system-ui; color: #18211d; background: #f4f6f3; }
+  h1 { font-size: 24px; } .notice { border: 1px solid #bc7900; background: #fff5dc; padding: 16px; }
+  li { padding: 9px 12px; border-bottom: 1px solid #dce2dd; } .pass { color: #166534; } .fail { color: #a61b1b; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; }
+  #status { font-weight: 700; padding: 12px 0; }
+</style>
+<h1>Readio 隔离数据集成自查</h1>
+<p class="notice"><strong>仅用于测试沙盒。</strong>本页只允许在 <code>http://127.0.0.1:8791</code> 执行，
+会清空该 origin 下的 <code>readio</code> 数据库，包括运行前、每项测试之间和结束后。
+该地址必须代理至模拟 API；测试不调用真实供应商。正式浏览器数据属于其他 origin。</p>
+<p id="status" data-state="starting">正在检查测试环境…</p>
+<ol id="results"></ol>
+<pre id="details"></pre>
+<script type="module">
+import db, { addArticle, renameArticle, deleteArticle, touchArticle, setLastIndex, setFinished,
+  toggleSavedSentence, toggleSavedWord, removeSaved, restoreSaved, getSetting, setSetting, getDataEpoch } from '/src/db.js';
+import { splitSentences, tokenize } from '/src/text.js';
+import { translateSentence, translateSavedSentence, lookupWord } from '/src/api.js';
+import { start, reset, retryFailed, ensureAudio } from '/src/audioQueue.js';
+import { exportBackup, readBackup, validateBackup, importBackup } from '/src/backup.js';
+
+const status = document.querySelector('#status');
+const results = [];
+const logs = [];
+let speechActive = 0;
+let maximumSpeechActive = 0;
+const nativeFetch = window.fetch.bind(window);
+const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+function assert(condition, message = '断言失败') { if (!condition) throw new Error(message); }
+const equal = (actual, expected, message = '值不匹配') => assert(JSON.stringify(actual) === JSON.stringify(expected),
+  `${message}\n实际：${JSON.stringify(actual)}\n预期：${JSON.stringify(expected)}`);
+async function rejects(fn, message) {
+  try { await fn(); } catch (error) { if (message) assert(error.message.includes(message), `错误文案不匹配：${error.message}`); return error; }
+  throw new Error('操作本应失败');
+}
+async function until(check, description, timeout = 10000) {
+  const began = performance.now();
+  while (performance.now() - began < timeout) {
+    if (await check()) return;
+    await sleep(35);
+  }
+  throw new Error(`等待超时：${description}`);
+}
+const speechLogs = () => logs.filter(log => log.kind === 'speech');
+const translationLogs = () => logs.filter(log => log.kind === 'translation');
+const lookupLogs = () => logs.filter(log => log.kind === 'lookup');
+const byArticle = articleId => db.sentences.where('articleId').equals(articleId).sortBy('idx');
+async function audioReady(articleId) {
+  await until(async () => {
+    const article = await db.articles.get(articleId);
+    const rows = await db.audios.where('articleId').equals(articleId).toArray();
+    return rows.length === article?.sentenceCount && rows.every(row => row.status === 'ok' && row.blob?.size);
+  }, `文章 ${articleId} 的音频完成`);
+}
+async function clearSandbox() {
+  reset();
+  await until(() => speechActive === 0, '取消先前音频', 3000);
+  await db.transaction('rw', db.tables, async () => {
+    for (const table of db.tables) await table.clear();
+  });
+  logs.length = 0;
+  maximumSpeechActive = 0;
+}
+async function silentArticle(title, text) {
+  const articleId = await addArticle(title, text);
+  reset();
+  await until(() => speechActive === 0, '停止自动音频', 3000);
+  return await db.articles.get(articleId);
+}
+function makeBackup(article, sentences, extra = {}) {
+  return { app: 'Readio', version: 1, exportedAt: new Date().toISOString(), data: {
+    articles: article ? [article] : [], sentences, lookups: [], savedSentences: [], savedWords: [], settings: [], ...extra,
+  } };
+}
+async function businessSnapshot() {
+  const names = ['articles', 'sentences', 'lookups', 'savedSentences', 'savedWords', 'settings'];
+  return Object.fromEntries(await Promise.all(names.map(async name => [name, await db.table(name).toArray()])));
+}
+async function test(name, run) {
+  const item = document.createElement('li');
+  item.textContent = `RUN · ${name}`;
+  document.querySelector('#results').append(item);
+  status.textContent = `正在运行：${name}`;
+  let timer;
+  try {
+    await clearSandbox();
+    await Promise.race([run(), new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('本项测试超过 25 秒')), 25000);
+    })]);
+    item.textContent = `PASS · ${name}`;
+    item.className = 'pass';
+    results.push({ name, pass: true });
+  } catch (error) {
+    item.textContent = `FAIL · ${name}：${error.message}`;
+    item.className = 'fail';
+    const details = document.createElement('pre');
+    details.textContent = `${error.stack || error}\n请求记录：${JSON.stringify(logs, null, 2)}`;
+    item.append(details);
+    results.push({ name, pass: false, error: error.message });
+  } finally { clearTimeout(timer); }
+}
+
+async function run() {
+  if (location.origin !== 'http://127.0.0.1:8791') {
+    status.textContent = '已拒绝执行：必须使用 http://127.0.0.1:8791/tests/browser-checks.html。未清空数据库。';
+    status.dataset.state = 'refused';
+    return;
+  }
+  // Reset the mock's failure counters before any test so refreshing this page is reproducible.
+  // Verify the dedicated marker before clearing the sandbox database.
+  const resetResponse = await nativeFetch('/v1/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [{ role: 'user', content: '__reset_readio_qa__' }], stream: false }),
+    signal: AbortSignal.timeout(5000),
+  });
+  const resetResult = await resetResponse.json();
+  assert(resetResponse.ok && resetResult?.choices?.[0]?.message?.content === 'readio-qa-reset-ok',
+    '模拟 API 重置失败，已停止自查且未清空数据库；请先启动 npm run test:browser');
+  // Count actual requests without replacing the simulated backend's behavior.
+  window.fetch = async (input, options) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    if (url.origin !== location.origin || !url.pathname.startsWith('/v1/')) throw new Error('测试禁止请求外部服务');
+    const body = JSON.parse(options?.body || '{}');
+    const kind = url.pathname.endsWith('/audio/speech') ? 'speech' : body.response_format ? 'lookup' : 'translation';
+    const log = { kind, text: kind === 'speech' ? body.input : body.messages?.at(-1)?.content,
+      start: Math.round(performance.now()), thinking: body.thinking };
+    logs.push(log);
+    if (kind === 'speech') maximumSpeechActive = Math.max(maximumSpeechActive, ++speechActive);
+    try {
+      const response = await nativeFetch(input, options);
+      log.status = response.status;
+      return response;
+    } catch (error) { log.error = error.name; throw error; }
+    finally {
+      log.end = Math.round(performance.now());
+      if (kind === 'speech') speechActive--;
+    }
+  };
+  status.dataset.state = 'running';
+  try {
+    await test('数据库事务、分段、标题、学习进度与校验失败不留部分数据', async () => {
+      const article = await silentArticle('', 'First sentence. Second sentence.\n\nThird sentence.');
+      equal(article.title, 'First sentence');
+      const sentences = await byArticle(article.id);
+      equal(sentences.map(row => row.paraStart), [false, false, true]);
+      equal(sentences.map(row => row.idx), [0, 1, 2]);
+      equal(await db.audios.where('articleId').equals(article.id).count(), 3);
+      const count = await db.articles.count();
+      await rejects(() => addArticle('', '没有英语'), '没有识别到英文内容');
+      await rejects(() => addArticle('', Array.from({ length: 301 }, () => 'A sentence.').join(' ')), '最多支持 300 句');
+      equal(await db.articles.count(), count, '失败后文章数不变');
+      await renameArticle(article.id, 'New title');
+      await rejects(() => renameArticle(article.id, '  '));
+      const touched = await touchArticle(article.id);
+      assert(touched.lastStudiedAt && touched.sortAt === touched.lastStudiedAt);
+      await setLastIndex(article.id, 2);
+      await setFinished(article.id);
+      assert((await db.articles.get(article.id)).finished);
+      const restarted = await touchArticle(article.id);
+      equal([restarted.lastIndex, restarted.finished], [0, false]);
+      const value = "It's well-known—2026!";
+      equal(tokenize(value).map(token => token.value).join(''), value);
+      equal(splitSentences('One.\n\nTwo.').map(row => row.paraStart), [false, true]);
+    });
+
+    await test('音频按句顺序、最多并发3、Blob缓存与按需同key去重', async () => {
+      const texts = ['Queue first sentence.', 'Queue second sentence.', 'Queue third sentence.',
+        'Queue fourth sentence.', 'Queue fifth sentence.'];
+      const articleId = await addArticle('Queue', texts.join(' '));
+      await audioReady(articleId);
+      equal(speechLogs().map(log => log.text), texts, '入队顺序');
+      assert(maximumSpeechActive <= 3 && maximumSpeechActive >= 2, `实际最高并发：${maximumSpeechActive}`);
+      const before = speechLogs().length;
+      assert((await ensureAudio(`s:${articleId}:0`, texts[0])).size > 0);
+      equal(speechLogs().length, before, '文章音频命中缓存');
+      const blobs = await Promise.all([ensureAudio('w:queue-cache', 'queue-cache'), ensureAudio('w:queue-cache', 'queue-cache')]);
+      assert(blobs.every(blob => blob.size > 0));
+      equal(speechLogs().length, before + 1, '相同按需key只请求一次');
+      await ensureAudio('w:queue-cache', 'queue-cache');
+      equal(speechLogs().length, before + 1, '单词音频命中缓存');
+    });
+
+    await test('音频自动重试2次后失败，手动重试第4次成功', async () => {
+      const articleId = await addArticle('Retry audio', 'Fail audio recovery example.');
+      await until(async () => (await db.audios.get(`s:${articleId}:0`))?.status === 'fail', '自动重试失败', 12000);
+      equal(speechLogs().length, 3, '初次加两次重试');
+      const starts = speechLogs().map(log => log.start);
+      assert(starts[1] - starts[0] >= 950, '第一次重试至少等待约1秒');
+      assert(starts[2] - starts[1] >= 2950, '第二次重试至少等待约3秒');
+      await retryFailed(articleId);
+      await audioReady(articleId);
+      equal(speechLogs().length, 4);
+    });
+
+    await test('刷新式start恢复pending，重复start不重复入队', async () => {
+      const article = await silentArticle('Resume', 'Resume first example. Resume second example.');
+      equal((await db.audios.where('articleId').equals(article.id).toArray()).map(row => row.status), ['pending', 'pending']);
+      logs.length = 0;
+      await Promise.all([start(), start()]);
+      await audioReady(article.id);
+      equal(speechLogs().length, 2);
+    });
+
+    await test('句子翻译、语境查词缓存以及JSON字段与关闭thinking契约', async () => {
+      const article = await silentArticle('Cache', 'A quiet cache example.');
+      const [sentence] = await byArticle(article.id);
+      const zh = await translateSentence(sentence);
+      assert(typeof zh === 'string' && zh.length);
+      equal(await translateSentence(sentence), zh);
+      equal((await db.sentences.get([article.id, 0])).zh, zh);
+      equal(translationLogs().length, 1);
+      const first = await lookupWord('quiet', sentence.text);
+      equal(await lookupWord('Quiet', sentence.text), first);
+      equal(lookupLogs().length, 1);
+      assert(first.phonetic.startsWith('/') && first.meaning && first.pos);
+      assert(logs.filter(log => log.kind !== 'speech').every(log => log.thinking?.type === 'disabled'));
+      await lookupWord('quiet', 'Another quiet cache example.');
+      equal(lookupLogs().length, 2, '不同语境分别缓存');
+    });
+
+    await test('收藏后台翻译、词语境去重、撤销、来源快照与删除后收藏发音', async () => {
+      const article = await silentArticle('Original title', 'A quiet morning brings hope. Another quiet morning follows.');
+      const [one, two] = await byArticle(article.id);
+      assert(await toggleSavedSentence(article, one));
+      await until(async () => (await db.savedSentences.toArray())[0]?.zhStatus === 'ok', '收藏后台翻译');
+      const [saved] = await db.savedSentences.toArray();
+      assert(saved.zh);
+      const lookup = await lookupWord('quiet', one.text);
+      assert(await toggleSavedWord(article, one, 'quiet', lookup));
+      equal(await toggleSavedWord(article, one, 'Quiet', lookup), false, '同一句大小写去重并取消');
+      assert(await toggleSavedWord(article, one, 'quiet', lookup));
+      assert(await toggleSavedWord(article, two, 'quiet', lookup));
+      equal(await db.savedWords.count(), 2, '不同句子可分别收藏');
+      await renameArticle(article.id, 'Renamed title');
+      equal((await db.savedSentences.get(saved.id)).articleTitle, 'Original title');
+      const removed = await removeSaved('savedSentences', saved.id);
+      equal(await db.savedSentences.count(), 0);
+      await restoreSaved('savedSentences', removed);
+      equal(await db.savedSentences.count(), 1);
+      const [word] = await db.savedWords.toArray();
+      await restoreSaved('savedWords', await removeSaved('savedWords', word.id));
+      equal(await db.savedWords.count(), 2);
+      await deleteArticle(article.id);
+      equal(await db.sentences.where('articleId').equals(article.id).count(), 0);
+      equal(await db.audios.where('articleId').equals(article.id).count(), 0);
+      equal([await db.savedSentences.count(), await db.savedWords.count()], [1, 2]);
+      await db.savedSentences.update(saved.id, { zh: null, zhStatus: 'fail' });
+      assert(await translateSavedSentence(await db.savedSentences.get(saved.id)));
+      assert((await ensureAudio(`f:${saved.id}`, saved.text)).size > 0);
+      assert((await ensureAudio('w:quiet', 'quiet')).size > 0);
+    });
+
+    await test('收藏翻译失败可重试，删除原文后仍可补译', async () => {
+      const article = await silentArticle('Translation retry', 'Fail translation recovery example.');
+      const [sentence] = await byArticle(article.id);
+      await toggleSavedSentence(article, sentence);
+      await until(async () => (await db.savedSentences.toArray())[0]?.zhStatus === 'fail', '首次翻译失败');
+      await deleteArticle(article.id);
+      const [saved] = await db.savedSentences.toArray();
+      assert(await translateSavedSentence(saved));
+      equal((await db.savedSentences.get(saved.id)).zhStatus, 'ok');
+      equal(translationLogs().length, 2);
+    });
+
+    await test('备份完整导出、读取、导入覆盖/重建音频、非法输入无写入、事务失败回滚', async () => {
+      const article = await silentArticle('Backup source', 'Backup source example.');
+      const [sentence] = await byArticle(article.id);
+      await translateSentence(sentence);
+      await lookupWord('source', sentence.text);
+      await toggleSavedSentence(article, await db.sentences.get([article.id, 0]));
+      await setSetting('speed', 0.8);
+      await setSetting('lastTab', 'sentences');
+      await setSetting('favView', { sentences: 'compact', words: 'full' });
+      const click = HTMLAnchorElement.prototype.click;
+      let exported;
+      try {
+        HTMLAnchorElement.prototype.click = function () {};
+        exported = await exportBackup();
+      } finally { HTMLAnchorElement.prototype.click = click; }
+      assert(!Object.hasOwn(exported.data, 'audios') && exported.data.lookups.length === 1);
+      equal(await readBackup(new Blob([JSON.stringify(exported)])), exported);
+      await addArticle('Extra article', 'Extra article example.');
+      await setSetting('speed', 1.5);
+      await importBackup(exported);
+      equal(await db.articles.count(), 1);
+      equal(await getSetting('speed', 1), 0.8);
+      equal((await db.audios.toArray()).map(row => row.status), ['pending']);
+      await audioReady(article.id);
+      equal(await businessSnapshot(), exported.data);
+      const before = await businessSnapshot();
+      const epoch = getDataEpoch();
+      const invalid = structuredClone(exported);
+      invalid.data.sentences[0].articleId = 999999;
+      await rejects(() => importBackup(invalid), '这个文件不是 Readio 备份');
+      await rejects(() => readBackup(new Blob(['invalid-json'])), '这个文件不是 Readio 备份');
+      equal(getDataEpoch(), epoch, '非法文件不能重置现有任务');
+      equal(await businessSnapshot(), before, '非法文件不能修改现有数据');
+      const changed = structuredClone(exported);
+      changed.data.articles[0].title = 'Must roll back';
+      const failAudioInsert = () => { throw new Error('injected import write failure'); };
+      db.audios.hook('creating', failAudioInsert);
+      try { await rejects(() => importBackup(changed), 'injected import write failure'); }
+      finally { db.audios.hook('creating').unsubscribe(failAudioInsert); }
+      equal(await businessSnapshot(), before, '事务失败回滚所有业务表');
+      assert((await db.audios.get(`s:${article.id}:0`)).blob.size, '原音频也回滚保留');
+    });
+
+    await test('导入孤儿收藏抬高文章自增ID，删除过的ID不复用', async () => {
+      const orphan = { id: 888, text: 'An orphan favorite.', zh: '孤儿收藏。', zhStatus: 'ok',
+        articleId: 50000, articleTitle: 'Deleted source', idx: 3, createdAt: Date.now() };
+      await importBackup(makeBackup(null, [], { savedSentences: [orphan] }));
+      const articleId = await addArticle('Fresh article', 'A fresh article example.');
+      assert(articleId > 50000, `新文章ID必须大于孤儿来源：${articleId}`);
+      await deleteArticle(articleId);
+      const laterId = await addArticle('Later article', 'A later article example.');
+      assert(laterId > articleId, '删除文章后自增序列保留');
+      equal((await db.savedSentences.get(888)).articleId, 50000);
+      assert(!(await db.articles.get(50000)), '孤儿收藏不能连到新文章');
+    });
+
+    await test('导入reset隔离旧音频请求，不覆盖同key重建音频', async () => {
+      const articleId = await addArticle('Old audio', 'Slow audio isolation example.');
+      await until(() => speechLogs().some(log => log.text === 'Slow audio isolation example.'), '旧慢音频已发出');
+      const article = await db.articles.get(articleId);
+      const replacement = [{ articleId, idx: 0, text: 'Replacement audio isolation example.', paraStart: false, zh: null }];
+      await importBackup(makeBackup({ ...article, title: 'Replacement' }, replacement));
+      await audioReady(articleId);
+      const ready = await db.audios.get(`s:${articleId}:0`);
+      await sleep(2750);
+      const after = await db.audios.get(`s:${articleId}:0`);
+      equal(after.updatedAt, ready.updatedAt, '旧请求结束后不得写回');
+      equal((await db.sentences.get([articleId, 0])).text, replacement[0].text);
+      assert(speechLogs().some(log => log.text === 'Slow audio isolation example.' && log.error === 'AbortError'), '旧音频应被取消');
+    });
+
+    await test('导入reset隔离旧翻译，即使文章ID/句子/文本完全相同', async () => {
+      const article = await silentArticle('Old translation', 'Slow translation isolation example.');
+      const [sentence] = await byArticle(article.id);
+      const task = translateSentence(sentence).then(value => ({ value }), error => ({ error }));
+      await until(() => translationLogs().length > 0, '旧慢翻译已发出');
+      const imported = { ...sentence, zh: '导入的缓存译文，不能被旧请求覆盖。' };
+      await importBackup(makeBackup(article, [imported]));
+      const outcome = await task;
+      assert(outcome.error, '旧翻译必须拒绝写回');
+      equal((await db.sentences.get([article.id, 0])).zh, imported.zh);
+    });
+  } finally {
+    try { await clearSandbox(); }
+    catch (error) { results.push({ name: '最终清理', pass: false, error: error.message }); }
+    window.fetch = nativeFetch;
+    const passed = results.filter(result => result.pass).length;
+    const failed = results.length - passed;
+    window.__READIO_CHECKS__ = { complete: true, passed, failed, results };
+    status.dataset.state = failed ? 'failed' : 'passed';
+    status.textContent = `已完成：${passed} PASS，${failed} FAIL。测试沙盒数据库已清空。`;
+    document.querySelector('#details').textContent = JSON.stringify(window.__READIO_CHECKS__, null, 2);
+  }
+}
+run().catch(error => {
+  status.dataset.state = 'failed';
+  status.textContent = `自查中断：${error.message}`;
+  document.querySelector('#details').textContent = error.stack || String(error);
+});
+</script>
+</html>

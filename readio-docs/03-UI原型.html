@@ -1,0 +1,1289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Readio 原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+/* =========================================================
+   设计令牌（实现时请原样迁移到 src/styles/tokens.css）
+   ========================================================= */
+:root {
+  --paper: #F3F5F2;      /* 页面底色：冷调纸白 */
+  --surface: #FFFFFF;    /* 弹窗、卡片、播放栏 */
+  --ink: #1A2120;        /* 主文字 */
+  --ink-2: #56605C;      /* 次要文字：译文、预览 */
+  --ink-3: #8C9692;      /* 弱文字：序号、来源、说明 */
+  --line: #DCE1DD;       /* 分隔线、边框 */
+  --hover: rgba(26, 33, 32, .045);
+  --dial: #2643A6;       /* 强调色：按钮、当前句竖条、刻度 */
+  --dial-soft: rgba(38, 67, 166, .10);
+  --band: #E6EBF8;       /* 当前句背景 */
+  --mark: #C08408;       /* 收藏星标 */
+  --danger: #B3261E;
+  --tick: #B9C2BE;       /* 已生成音频的刻度 */
+  --tick-off: #E1E5E2;   /* 未生成音频的刻度 */
+  --scrim: rgba(18, 24, 22, .42);
+  --shadow: 0 14px 36px rgba(18, 28, 40, .16), 0 2px 6px rgba(18, 28, 40, .06);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-en: "Newsreader", "Iowan Old Style", Georgia, serif;
+
+  --r-sm: 6px;   /* 小按钮、单词选中 */
+  --r-md: 10px;  /* 按钮、句子行、输入框 */
+  --r-lg: 14px;  /* 弹窗、查词卡片 */
+
+  --col: 680px;  /* 阅读列宽 */
+  --player-h: 112px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131716; --surface: #1B201F; --ink: #E6EAE8; --ink-2: #A7B0AC; --ink-3: #737D79;
+    --line: #2C3331; --hover: rgba(230, 234, 232, .05);
+    --dial: #8FA6F2; --dial-soft: rgba(143, 166, 242, .14); --band: #1F2A45;
+    --mark: #E2A93B; --danger: #F08A80; --tick: #4A5450; --tick-off: #262C2A;
+    --scrim: rgba(0, 0, 0, .55); --shadow: 0 14px 36px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #131716; --surface: #1B201F; --ink: #E6EAE8; --ink-2: #A7B0AC; --ink-3: #737D79;
+  --line: #2C3331; --hover: rgba(230, 234, 232, .05);
+  --dial: #8FA6F2; --dial-soft: rgba(143, 166, 242, .14); --band: #1F2A45;
+  --mark: #E2A93B; --danger: #F08A80; --tick: #4A5450; --tick-off: #262C2A;
+  --scrim: rgba(0, 0, 0, .55); --shadow: 0 14px 36px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+
+/* ========================= 基础 ========================= */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-ui); font-size: 15px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button:disabled { cursor: default; opacity: .38; }
+:focus-visible { outline: 2px solid var(--dial); outline-offset: 2px; border-radius: var(--r-sm); }
+.en { font-family: var(--font-en); }
+.num { font-variant-numeric: tabular-nums; }
+svg { display: block; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 36px; padding: 0 14px; border-radius: var(--r-md);
+  font-size: 14px; font-weight: 500; white-space: nowrap;
+}
+.btn.primary { background: var(--dial); color: #fff; }
+:root[data-theme="dark"] .btn.primary { color: #0F1630; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #0F1630; } }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.ghost { border: 1px solid var(--line); background: var(--surface); }
+.btn.ghost:hover:not(:disabled) { background: var(--hover); }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.sm { height: 30px; padding: 0 10px; font-size: 13px; }
+.link { color: var(--dial); font-size: inherit; }
+.link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ic {
+  width: 32px; height: 32px; display: inline-grid; place-items: center;
+  border-radius: var(--r-sm); color: var(--ink-2);
+}
+.ic:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.ic svg { width: 18px; height: 18px; }
+
+.wrap { max-width: calc(var(--col) + 40px); margin: 0 auto; padding: 0 20px; }
+
+/* ========================= 列表页 ========================= */
+.l-head { display: flex; align-items: center; justify-content: space-between; height: 76px; }
+.wordmark { font-family: var(--font-en); font-size: 27px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
+.l-head .right { display: flex; align-items: center; gap: 6px; }
+
+.tabbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tabs { display: flex; gap: 22px; }
+.viewseg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--hover); }
+.viewseg button { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--ink-2); }
+.viewseg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(18, 28, 40, .1); }
+.tab {
+  position: relative; height: 42px; font-size: 15px; color: var(--ink-3);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.tab .cnt { font-size: 12.5px; color: var(--ink-3); }
+.tab[aria-selected="true"] { color: var(--ink); font-weight: 600; }
+.tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--dial); border-radius: 2px;
+}
+
+.list { list-style: none; margin: 0; padding: 0 0 80px; }
+.row { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid var(--line); }
+.row-main { flex: 1; min-width: 0; text-align: left; padding: 18px 10px; margin: 0 -10px; border-radius: var(--r-md); cursor: pointer; }
+.row-main:hover { background: var(--hover); }
+.row-title {
+  font-family: var(--font-en); font-size: 21px; font-weight: 600; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0 0 4px;
+}
+.row-prev {
+  font-family: var(--font-en); font-size: 15.5px; color: var(--ink-2); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px;
+}
+.row-meta { font-size: 13px; color: var(--ink-3); display: flex; align-items: center; gap: 8px; }
+.row-meta.gen { color: var(--dial); }
+.row-meta.fail { color: var(--danger); }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.row .more { margin-top: 18px; }
+
+/* 收藏项 */
+.fav { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.fav-en { font-family: var(--font-en); font-size: 19px; line-height: 1.5; margin: 0 0 6px; }
+.fav-zh { font-size: 14.5px; color: var(--ink-2); margin: 0 0 10px; }
+.fav-zh.muted { color: var(--ink-3); }
+.fav-src { font-size: 13px; color: var(--ink-3); margin: 0 0 10px; }
+.fav-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-left: -8px; }
+.act {
+  height: 30px; padding: 0 8px; border-radius: var(--r-sm); font-size: 13px; color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.act svg { width: 16px; height: 16px; }
+.act:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.act.on { color: var(--dial); }
+/* 紧凑模式：只显示原文，点击展开 */
+.fav.compact { display: flex; align-items: center; gap: 10px; padding: 12px 0; cursor: pointer; }
+.fav.compact:hover { background: linear-gradient(90deg, transparent, var(--hover) 12%, var(--hover) 88%, transparent); }
+.fav.compact .fav-en { flex: 1; margin: 0; font-size: 18px; }
+.fav.compact .word-mid { flex: 1; font-family: var(--font-en); font-size: 20px; font-weight: 600; }
+.fav.compact .ic { flex: none; opacity: .5; }
+.fav.compact:hover .ic, .fav.compact .ic.on { opacity: 1; }
+.fav.compact .ic.on { color: var(--dial); }
+.word-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.word-big { font-family: var(--font-en); font-size: 25px; font-weight: 600; }
+.phon { font-size: 14px; color: var(--ink-3); }
+.def { font-size: 15px; margin: 0 0 8px; }
+.pos { color: var(--ink-3); margin-right: 4px; }
+.quote {
+  font-family: var(--font-en); font-size: 16.5px; color: var(--ink-2); line-height: 1.55;
+  margin: 0 0 8px; padding-left: 12px; border-left: 2px solid var(--line);
+}
+.quote b { color: var(--ink); font-weight: 600; }
+
+.empty { text-align: center; padding: 88px 20px; }
+.empty h2 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+.empty p { color: var(--ink-2); margin: 0 0 20px; }
+
+/* ========================= 学习页 ========================= */
+.s-top {
+  position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border-bottom: 1px solid transparent; transition: border-color .2s;
+}
+.s-top.scrolled { border-bottom-color: var(--line); }
+.s-top .bar { display: grid; grid-template-columns: 88px 1fr 88px; align-items: center; height: 56px; }
+.back { display: inline-flex; align-items: center; gap: 2px; height: 34px; padding: 0 8px 0 4px; margin-left: -8px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 14px; }
+.back:hover { background: var(--hover); color: var(--ink); }
+.back svg { width: 18px; height: 18px; }
+.s-title { text-align: center; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s-audio { text-align: right; font-size: 12.5px; color: var(--dial); }
+
+.doc { padding-top: 20px; padding-bottom: calc(var(--player-h) + 80px); }
+.doc-title { font-family: var(--font-en); font-size: 34px; line-height: 1.2; font-weight: 600; letter-spacing: -.012em; margin: 18px 0 28px; }
+/* 段落模式：句子在段落里连续排列 */
+.para { font-family: var(--font-en); font-size: 20.5px; line-height: 1.75; margin: 0 0 1.1em; }
+.sx {
+  border-radius: 4px; padding: 3px 1px; margin: 0 -1px; scroll-margin: 100px;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; transition: background .15s;
+}
+.sx.hov { background: var(--hover); }
+.sx.cur { background: var(--band); box-shadow: inset 0 -2px 0 var(--dial); }
+.sx.flash { animation: flash 2s ease-out; }
+@keyframes flash { 0%, 35% { box-shadow: 0 0 0 2px var(--dial); } 100% { box-shadow: 0 0 0 2px transparent; } }
+.mini-star { display: inline-block; width: 13px; height: 13px; color: var(--mark); vertical-align: 2px; margin-left: 3px; }
+.mini-star svg { width: 13px; height: 13px; }
+.w { border-radius: 4px; cursor: pointer; padding: 0 1px; margin: 0 -1px; transition: background .12s; }
+.w:hover { background: var(--dial-soft); }
+.w.saved { text-decoration: underline dotted var(--mark); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+.w.sel { background: var(--dial); color: var(--surface); text-decoration: none; }
+/* 译文：在该句后另起一行，段落从这里断开 */
+.sx-zh {
+  display: block; font-family: var(--font-ui); font-size: 15.5px; line-height: 1.6; color: var(--ink-2);
+  margin: 6px 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid var(--dial);
+}
+.sx-zh.muted { color: var(--ink-3); border-left-color: var(--line); }
+/* 句子工具条：浮在句末上方，不挤动排版 */
+.sbar {
+  position: absolute; z-index: 40; display: flex; gap: 2px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow);
+}
+.sbar .ic { width: 32px; height: 30px; }
+.tr { font-size: 14px; font-weight: 600; }
+.tr.on { color: var(--dial); background: var(--dial-soft); }
+.tr.on:hover:not(:disabled) { color: var(--dial); }
+.star.on, .star.on:hover:not(:disabled) { color: var(--mark); }
+
+
+/* 回到当前句 */
+.follow {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--player-h) + 14px + env(safe-area-inset-bottom));
+  z-index: 25; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--surface); color: var(--ink);
+  font-size: 13px; box-shadow: var(--shadow); border: 1px solid var(--line);
+}
+
+/* 播放栏 */
+.player {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: var(--surface);
+  border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
+}
+.ticks { display: flex; align-items: center; gap: 2px; height: 22px; padding-top: 6px; }
+.tk { flex: 1; height: 16px; display: flex; align-items: center; cursor: pointer; min-width: 2px; }
+.tk i { display: block; width: 100%; height: 4px; border-radius: 2px; background: var(--tick); transition: height .12s, background .12s; }
+.tk.pend i { background: var(--tick-off); }
+.tk.fail i { background: var(--danger); opacity: .7; }
+.tk.cur i { background: var(--dial); height: 10px; }
+.tk:hover i { height: 10px; }
+.p-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 76px; }
+.p-pos { font-size: 14px; color: var(--ink-2); }
+.p-pos small { display: block; font-size: 12px; color: var(--dial); line-height: 1.2; }
+.p-ctrl { display: flex; align-items: center; gap: 14px; }
+.p-ctrl .ic { width: 40px; height: 40px; color: var(--ink); }
+.p-ctrl .ic svg { width: 20px; height: 20px; }
+.p-play { width: 54px; height: 54px; border-radius: 50%; background: var(--dial); color: #fff; display: grid; place-items: center; }
+:root[data-theme="dark"] .p-play { color: #0F1630; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .p-play { color: #0F1630; } }
+.p-play svg { width: 22px; height: 22px; }
+.p-play:hover { filter: brightness(1.08); }
+.p-speed { justify-self: end; position: relative; }
+.speed-btn { height: 34px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line); font-size: 13.5px; }
+.speed-btn:hover { background: var(--hover); }
+
+/* ========================= 浮层 ========================= */
+.pop {
+  position: absolute; z-index: 60; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); box-shadow: var(--shadow); padding: 6px; min-width: 140px;
+}
+.pop button { display: flex; width: 100%; height: 34px; align-items: center; padding: 0 10px; border-radius: var(--r-sm); font-size: 14px; }
+.pop button:hover { background: var(--hover); }
+.pop button.danger { color: var(--danger); }
+.pop button.sel { color: var(--dial); font-weight: 600; }
+
+.scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); display: grid; place-items: center; padding: 20px; }
+.dialog {
+  width: 100%; max-width: 560px; max-height: calc(100vh - 40px); overflow: auto;
+  background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 24px;
+}
+.dialog.small { max-width: 400px; }
+.dialog h2 { font-size: 18px; margin: 0 0 6px; }
+.dialog p.desc { color: var(--ink-2); margin: 0 0 4px; }
+.field { display: block; margin: 16px 0 0; }
+.field span { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; }
+.input, .textarea {
+  width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper);
+  color: var(--ink); font: inherit; padding: 9px 12px;
+}
+.textarea { font-family: var(--font-en); font-size: 16px; line-height: 1.55; height: 300px; resize: vertical; }
+.input:focus, .textarea:focus { outline: none; border-color: var(--dial); box-shadow: 0 0 0 3px var(--dial-soft); }
+.hint { font-size: 13px; color: var(--ink-3); margin-top: 6px; min-height: 20px; }
+.hint.err { color: var(--danger); }
+.d-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+/* 文章详情弹窗 */
+.dialog.article { max-width: 640px; padding: 0; display: flex; flex-direction: column; max-height: min(86vh, 900px); overflow: hidden; }
+.ad-head { display: flex; align-items: flex-start; gap: 8px; padding: 22px 20px 0 24px; }
+.ad-title { flex: 1; min-width: 0; margin: 0; font-family: var(--font-en); font-size: 26px; line-height: 1.25; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+.ad-title .ic { flex: none; }
+.ad-title form { display: flex; gap: 8px; flex: 1; }
+.ad-title .input { font-family: var(--font-en); font-size: 20px; padding: 5px 10px; }
+.ad-meta { padding: 6px 24px 14px; }
+.ad-meta .row-meta { margin: 0; }
+.ad-body { overflow: auto; padding: 0 24px 8px; border-top: 1px solid var(--line); }
+.ad-text { font-family: var(--font-en); font-size: 17.5px; line-height: 1.7; padding-top: 18px; }
+.ad-text p { margin: 0 0 1em; }
+.ad-text .saved { text-decoration: underline dotted var(--mark); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+.ad-words { border-top: 1px solid var(--line); padding: 16px 0 6px; }
+.ad-words h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; display: flex; gap: 6px; }
+.ad-words h3 .cnt { color: var(--ink-3); font-weight: 400; }
+.adw { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.adw:last-child { border-bottom: 0; }
+.adw-word { font-family: var(--font-en); font-size: 19px; font-weight: 600; margin-right: 8px; }
+.adw .def { margin: 2px 0 0; font-size: 14px; color: var(--ink-2); }
+.adw-acts { display: flex; gap: 2px; }
+.ad-empty { color: var(--ink-3); font-size: 14px; margin: 4px 0 10px; }
+.ad-foot { display: flex; align-items: center; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line); background: var(--surface); }
+.ad-foot .spacer { flex: 1; }
+.btn.danger-text { color: var(--danger); border-color: transparent; background: none; }
+.btn.danger-text:hover { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+
+/* 查词卡片 */
+.wcard {
+  position: absolute; z-index: 50; width: 320px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 16px 16px 14px;
+}
+.wc-head { display: flex; align-items: center; gap: 4px; margin: -4px 0 2px; }
+.wc-word { font-family: var(--font-en); font-size: 24px; font-weight: 600; }
+.wc-meta { display: flex; gap: 12px; font-size: 13.5px; color: var(--ink-3); margin-bottom: 10px; }
+.wc-def { font-size: 15px; line-height: 1.6; margin-bottom: 14px; }
+.wc-acts { display: flex; justify-content: space-between; align-items: center; }
+.sk { height: 12px; border-radius: 6px; background: var(--tick-off); margin: 8px 0; animation: pulse 1.2s ease-in-out infinite; }
+.speaking { color: var(--dial) !important; }
+
+/* 提示条 */
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 28px; z-index: 90;
+  display: flex; align-items: center; gap: 14px; max-width: calc(100vw - 32px);
+  background: var(--ink); color: var(--paper); border-radius: var(--r-md); padding: 10px 14px; font-size: 14px;
+  box-shadow: var(--shadow);
+}
+body.on-study .toast { bottom: calc(var(--player-h) + 16px + env(safe-area-inset-bottom)); }
+.toast button { color: color-mix(in srgb, var(--dial) 55%, var(--paper)); font-weight: 600; }
+
+/* 原型面板（仅原型使用，不需要实现） */
+.proto-btn {
+  position: fixed; left: 14px; top: 14px; z-index: 65; height: 28px; padding: 0 10px; border-radius: 999px;
+  border: 1px dashed var(--ink-3); color: var(--ink-3); font-size: 12px; background: var(--paper);
+}
+.proto { position: fixed; left: 14px; top: 48px; z-index: 95; width: 240px; background: var(--surface); border: 1px dashed var(--ink-3); border-radius: var(--r-md); padding: 12px; font-size: 13px; box-shadow: var(--shadow); }
+.proto p { margin: 0 0 8px; color: var(--ink-3); }
+.proto label { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.proto .btn { width: 100%; margin-top: 6px; }
+
+/* ========================= 窄屏 ========================= */
+@media (max-width: 640px) {
+  .doc-title { font-size: 28px; }
+  .para { font-size: 19px; }
+  .p-ctrl { gap: 6px; }
+  .s-top .bar { grid-template-columns: 64px 1fr 64px; }
+  .back span { display: none; }
+  .scrim { padding: 0; place-items: end stretch; }
+  .dialog { max-width: none; border-radius: var(--r-lg) var(--r-lg) 0 0; max-height: 92vh; }
+  .dialog.small { max-width: none; }
+  .dialog.article { max-height: 94vh; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .ad-foot { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .wcard { position: fixed; left: 0 !important; right: 0; top: auto !important; bottom: 0; width: auto; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .proto-btn { left: auto; right: 10px; top: 64px; }
+  .proto { left: auto; right: 10px; top: 98px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===================== 列表页 ===================== -->
+<main id="pageList">
+  <div class="wrap">
+    <header class="l-head">
+      <h1 class="wordmark">Readio</h1>
+      <div class="right">
+        <button class="btn primary" id="addBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          添加文章
+        </button>
+        <button class="ic" id="appMenuBtn" aria-label="更多">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="tabbar">
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="articles">文章 <span class="cnt num" id="cntA"></span></button>
+        <button class="tab" role="tab" data-tab="sentences">句子 <span class="cnt num" id="cntS"></span></button>
+        <button class="tab" role="tab" data-tab="words">生词 <span class="cnt num" id="cntW"></span></button>
+      </nav>
+      <div class="viewseg" id="viewSeg" role="group" aria-label="显示方式" hidden>
+        <button data-view="full">展开</button><button data-view="compact">紧凑</button>
+      </div>
+    </div>
+    <section id="listBody"></section>
+  </div>
+</main>
+
+<!-- ===================== 学习页 ===================== -->
+<main id="pageStudy" hidden>
+  <header class="s-top" id="studyTop">
+    <div class="wrap bar">
+      <button class="back" id="backBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+        <span>返回</span>
+      </button>
+      <div class="s-title" id="studyTitle"></div>
+      <div class="s-audio num" id="studyAudio"></div>
+    </div>
+  </header>
+  <article class="wrap doc">
+    <h1 class="doc-title" id="docTitle"></h1>
+    <div id="sents"></div>
+    <div class="sbar" id="sbar" hidden></div>
+  </article>
+  <button class="follow" id="followBtn" hidden>回到当前句</button>
+  <footer class="player" id="player">
+    <div class="wrap">
+      <div class="ticks" id="ticks"></div>
+      <div class="p-row">
+        <div class="p-pos num" id="pPos"></div>
+        <div class="p-ctrl">
+          <button class="ic" id="prevBtn" aria-label="上一句"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5.5" width="2.2" height="13" rx="1"/><path d="M19 5.8v12.4L9 12z"/></svg></button>
+          <button class="p-play" id="playBtn" aria-label="播放"></button>
+          <button class="ic" id="nextBtn" aria-label="下一句"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="16.8" y="5.5" width="2.2" height="13" rx="1"/><path d="M5 5.8v12.4L15 12z"/></svg></button>
+        </div>
+        <div class="p-speed"><button class="speed-btn num" id="speedBtn"></button></div>
+      </div>
+    </div>
+  </footer>
+</main>
+
+<div id="layer"></div>
+<div id="layer2"></div>
+<div class="toast" id="toast" hidden></div>
+
+<!-- 原型面板：只用于演示各种状态，正式实现不需要 -->
+<button class="proto-btn" id="protoBtn">原型面板</button>
+<div class="proto" id="proto" hidden>
+  <p>只用于在原型里演示各种状态，正式产品不需要实现。</p>
+  <label><input type="checkbox" id="pfLookup"> 查词请求失败</label>
+  <label><input type="checkbox" id="pfTrans"> 翻译请求失败</label>
+  <label><input type="checkbox" id="pfDark"> 深色模式</label>
+  <button class="btn ghost sm" id="pfEmpty">清空数据（看空状态）</button>
+  <button class="btn ghost sm" id="pfReset">恢复示例数据</button>
+</div>
+
+<script>
+/* ==========================================================
+   图标
+   ========================================================== */
+const I = {
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6L19 12z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="5" width="3.8" height="14" rx="1"/><rect x="13.7" y="5" width="3.8" height="14" rx="1"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>',
+  starOn: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+  speaker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z" fill="currentColor"/><path d="M15.5 9.2a4 4 0 010 5.6M18.2 6.6a7.6 7.6 0 010 10.8"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h10M4 11.5h10M4 16.5h6"/><path d="M15 15l3-3 3 3M18 12v8"/></svg>',
+};
+
+/* ==========================================================
+   示例数据（正式实现时来自 IndexedDB）
+   ========================================================== */
+const DAY = 864e5, NOW = Date.now();
+function seed() {
+  const A = (id, title, paras, o) => {
+    const sents = [];
+    paras.forEach(p => p.forEach((t, k) => sents.push({ text: t, para: k === 0 && sents.length > 0 })));
+    return Object.assign({ id, title, sents, zh: {}, lastIndex: 0, finished: false, lastStudiedAt: null,
+      audio: sents.map(() => 'ok') }, o);
+  };
+  const a1 = A(1, 'The Night Train Comes Back', [
+    ['For years, the night train between the two cities was treated as a relic of another age.',
+     'Airlines were faster, and most travelers simply forgot that you could fall asleep in one country and wake up in another.',
+     'Then something quietly changed.'],
+    ['People began to ask what a journey actually costs, not only in money but in time, attention, and carbon.',
+     'A seat on a plane saves a few hours, yet the hours around it are often lost to queues and security checks.',
+     'On a sleeper train, the journey itself becomes part of the evening.',
+     'You read, you look out at the dark fields, and at some point you stop noticing the movement at all.'],
+    ['Rail companies noticed the demand and brought back routes that had been closed for decades.',
+     'The new carriages are not luxurious, but they are clean, calm, and surprisingly quiet.',
+     'For many passengers, that quiet is exactly the point.'],
+  ], { createdAt: NOW - 6 * DAY, lastStudiedAt: NOW - 2 * 3600e3, lastIndex: 4,
+       zh: { 0: '多年来，往返两座城市之间的夜班火车一直被视为另一个时代的遗物。',
+             1: '飞机更快，大多数旅行者干脆忘了，你可以在一个国家睡着，在另一个国家醒来。',
+             2: '后来，有些事情悄悄地变了。',
+             3: '人们开始追问，一段旅程真正的代价是什么——不只是金钱，还有时间、注意力和碳排放。',
+             4: '坐飞机能省下几个小时，但前后的时间往往耗在排队和安检上。',
+             5: '在卧铺火车上，旅程本身成了夜晚的一部分。',
+             6: '你看书，望着窗外漆黑的田野，不知从什么时候起，你完全感觉不到列车在动了。',
+             7: '铁路公司注意到了这种需求，恢复了一些停运几十年的线路。',
+             8: '新车厢并不豪华，但干净、平静，而且出奇地安静。',
+             9: '对很多乘客来说，这份安静正是关键所在。' } });
+  const a2 = A(2, 'Why Cities Plant Trees on Purpose', [
+    ['City planners used to see trees as decoration.', 'Today they are treated more like infrastructure.',
+     'A single large tree can cool the street beneath it by several degrees on a summer afternoon.',
+     'It also slows rainwater, which takes pressure off old drainage systems.'],
+    ['The challenge is time.', 'A tree planted this year will not give real shade for another fifteen years.',
+     'That is why many cities now plan their streets with the next generation in mind.',
+     'They are building resilience for people who have not moved in yet.'],
+  ], { createdAt: NOW - 60e3 });
+  a2.audio = a2.audio.map((_, i) => i < 3 ? 'ok' : 'pend');
+  const a3 = A(3, 'Learning by Listening', [
+    ['Most learners spend far more time reading a language than hearing it.', 'The result is a strange gap.',
+     'You may recognize a word on the page and still miss it completely in conversation.'],
+    ['Listening to the same short text many times closes that gap faster than you might expect.',
+     'Start slowly, then raise the speed once every sentence feels familiar.'],
+  ], { createdAt: NOW - 1 * DAY });
+  const a4 = A(4, 'A Note on Small Habits', [
+    ['Big changes rarely begin with big decisions.', 'They usually start with something small enough to repeat tomorrow.',
+     'Read one paragraph a day.', 'Write down one sentence you liked.',
+     'After a month, the habit is no longer something you do; it becomes part of who you are.'],
+  ], { createdAt: NOW - 4 * DAY, lastStudiedAt: NOW - 3 * DAY, lastIndex: 1 });
+  a4.audio[2] = 'fail'; a4.audio[3] = 'fail';
+  const a5 = A(5, 'Morning Light', [
+    ['The kitchen was still dark when she made the first cup of tea.',
+     'Outside, the street was waking up one window at a time.', 'She liked this hour more than any other.'],
+  ], { createdAt: NOW - 9 * DAY, lastStudiedAt: NOW - 5 * DAY, lastIndex: 2, finished: true });
+
+  return {
+    articles: [a1, a2, a3, a4, a5],
+    savedS: [
+      { id: 's1', text: 'You may recognize a word on the page and still miss it completely in conversation.',
+        zh: null, zhState: 'pending', articleId: 3, articleTitle: 'Learning by Listening', index: 2, savedAt: NOW - 600e3 },
+      { id: 's2', text: 'On a sleeper train, the journey itself becomes part of the evening.',
+        zh: '在卧铺火车上，旅程本身成了夜晚的一部分。', zhState: 'ok', articleId: 1, articleTitle: 'The Night Train Comes Back', index: 5, savedAt: NOW - 1 * DAY },
+      { id: 's3', text: 'Slow mornings are not wasted time; they are where the day finds its shape.',
+        zh: '缓慢的早晨并不是浪费时间，一天正是在这里成形的。', zhState: 'ok', articleId: 99, articleTitle: 'Notes on Slow Mornings', index: 3, savedAt: NOW - 8 * DAY },
+    ],
+    savedW: [
+      { id: 'w1', word: 'resilience', lemma: null, phonetic: '/rɪˈzɪliəns/', pos: 'n.', meaning: '恢复力；（这里指）城市应对极端天气、在灾后恢复运转的能力',
+        sentence: 'They are building resilience for people who have not moved in yet.', articleId: 2, articleTitle: 'Why Cities Plant Trees on Purpose', index: 7, savedAt: NOW - 30e3 },
+      { id: 'w2', word: 'relic', lemma: null, phonetic: '/ˈrelɪk/', pos: 'n.', meaning: '遗物；（这里指）过时、被淘汰的东西',
+        sentence: 'For years, the night train between the two cities was treated as a relic of another age.', articleId: 1, articleTitle: 'The Night Train Comes Back', index: 0, savedAt: NOW - 2 * DAY },
+      { id: 'w3', word: 'linger', lemma: null, phonetic: '/ˈlɪŋɡər/', pos: 'v.', meaning: '逗留；（这里指）在早餐桌旁多待一会儿、不急着离开',
+        sentence: 'On weekends she likes to linger over breakfast with the radio on.', articleId: 99, articleTitle: 'Notes on Slow Mornings', index: 5, savedAt: NOW - 8 * DAY },
+    ],
+  };
+}
+let db = seed();
+let ui = { tab: 'articles', speed: 1.0, failLookup: false, failTrans: false,
+           view: { sentences: 'full', words: 'full' },  // 每个收藏标签各自记住显示方式
+           expanded: new Set() };                        // 紧凑模式下临时展开的项
+
+const DICT = {
+  relic: ['/ˈrelɪk/', 'n.', '遗物；（这里指）过时、被淘汰的东西'],
+  carriages: ['/ˈkærɪdʒɪz/', 'n.', '（火车的）车厢', 'carriage'],
+  quietly: ['/ˈkwaɪətli/', 'adv.', '悄悄地；不声不响地'],
+  noticing: ['/ˈnoʊtɪsɪŋ/', 'v.', '注意到；（这里指）察觉到列车在移动', 'notice'],
+  noticed: ['/ˈnoʊtɪst/', 'v.', '注意到；察觉到（市场需求）', 'notice'],
+  luxurious: ['/lʌɡˈʒʊriəs/', 'adj.', '豪华的；奢华的'],
+  surprisingly: ['/sərˈpraɪzɪŋli/', 'adv.', '出乎意料地'],
+  demand: ['/dɪˈmænd/', 'n.', '需求；（这里指）乘客对夜班火车的需求'],
+  decades: ['/ˈdekeɪdz/', 'n.', '几十年', 'decade'],
+  attention: ['/əˈtenʃn/', 'n.', '注意力；（这里指）旅途中耗费的精力'],
+  carbon: ['/ˈkɑːrbən/', 'n.', '碳；（这里指）碳排放'],
+  queues: ['/kjuːz/', 'n.', '排队的队伍', 'queue'],
+  journey: ['/ˈdʒɜːrni/', 'n.', '旅程'],
+  travelers: ['/ˈtrævələrz/', 'n.', '旅行者', 'traveler'],
+  sleeper: ['/ˈsliːpər/', 'n.', '卧铺列车；卧铺车厢'],
+  infrastructure: ['/ˈɪnfrəstrʌktʃər/', 'n.', '基础设施'],
+  drainage: ['/ˈdreɪnɪdʒ/', 'n.', '排水；（这里指）城市排水系统'],
+  resilience: ['/rɪˈzɪliəns/', 'n.', '恢复力；（这里指）城市应对极端天气、在灾后恢复运转的能力'],
+  familiar: ['/fəˈmɪliər/', 'adj.', '熟悉的；（这里指）每一句都听得很熟了'],
+};
+
+/* ==========================================================
+   工具
+   ========================================================== */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const WORD_RE = /[A-Za-z]+(?:['’-][A-Za-z]+)*/g;
+const byId = id => db.articles.find(a => a.id === id);
+const isTyping = e => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+
+function splitSentences(text) {
+  const paras = text.replace(/\r/g, '').split(/\n\s*\n/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const seg = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter('en', { granularity: 'sentence' }) : null;
+  const out = [];
+  paras.forEach(p => {
+    const parts = seg ? [...seg.segment(p)].map(x => x.segment.trim()) : p.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g).map(s => s.trim());
+    parts.filter(Boolean).forEach((t, k) => out.push({ text: t, para: k === 0 && out.length > 0 }));
+  });
+  return out;
+}
+function autoTitle(first) {
+  const words = first.replace(/[.!?;:,"'’”)\]]+$/, '').split(/\s+/);
+  return words.length > 8 ? words.slice(0, 8).join(' ') + '…' : words.join(' ');
+}
+
+/* 提示条 */
+let toastTimer;
+function toast(msg, action) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${esc(msg)}</span>` + (action ? `<button>${esc(action.label)}</button>` : '');
+  t.hidden = false;
+  if (action) t.querySelector('button').onclick = () => { action.fn(); t.hidden = true; };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), action ? 5000 : 3000);
+}
+
+/* 浮层管理 */
+const layer = $('#layer');
+let closeLayer = null;
+function openLayer(html, onClose) {
+  dismiss();
+  layer.innerHTML = html;
+  closeLayer = onClose || null;
+  return layer.firstElementChild;
+}
+function dismiss() {
+  if (!layer.innerHTML) return;
+  layer.innerHTML = '';
+  const f = closeLayer; closeLayer = null;
+  f && f();
+}
+
+function popMenu(anchor, items) {
+  const el = openLayer(`<div class="pop" role="menu">${items.map((it, i) =>
+    `<button data-i="${i}" class="${it.cls || ''}">${esc(it.label)}</button>`).join('')}</div>`);
+  const r = anchor.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let top = r.bottom + scrollY + 6;
+  if (items.above) top = r.top + scrollY - h - 8;
+  el.style.top = top + 'px';
+  el.style.left = Math.max(12, Math.min(r.right + scrollX - w, innerWidth - w - 12)) + 'px';
+  el.onclick = e => { const b = e.target.closest('button'); if (!b) return; const it = items[+b.dataset.i]; dismiss(); it.fn(); };
+}
+
+/* 确认框放在第二层，可以叠在文章弹窗上面 */
+const layer2 = $('#layer2');
+const dismiss2 = () => (layer2.innerHTML = '');
+function confirmBox({ title, desc, ok, danger, cancel = '取消', onOk }) {
+  layer2.innerHTML = `<div class="scrim"><div class="dialog small" role="dialog" aria-modal="true">
+    <h2>${esc(title)}</h2>${desc ? `<p class="desc">${esc(desc)}</p>` : ''}
+    <div class="d-acts"><button class="btn ghost" data-x>${esc(cancel)}</button>
+    <button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${esc(ok)}</button></div></div></div>`;
+  const el = layer2.firstElementChild;
+  el.onclick = e => {
+    if (e.target === el || e.target.closest('[data-x]')) dismiss2();
+    if (e.target.closest('[data-ok]')) { dismiss2(); onOk(); }
+  };
+  el.querySelector('[data-ok]').focus();
+}
+
+/* ==========================================================
+   路由：#/  与  #/study/:id?focus=N
+   ========================================================== */
+function route() {
+  dismiss();
+  const m = location.hash.match(/^#\/study\/(\d+)(?:\?focus=(\d+))?/);
+  if (m && byId(+m[1])) enterStudy(+m[1], m[2] != null ? +m[2] : null);
+  else { leaveStudy(); $('#pageList').hidden = false; $('#pageStudy').hidden = true; document.body.classList.remove('on-study'); renderList(); }
+}
+addEventListener('hashchange', route);
+
+/* ==========================================================
+   列表页
+   ========================================================== */
+function statusOf(a) {
+  const n = a.sents.length;
+  const pend = a.audio.filter(x => x === 'pend').length;
+  const fail = a.audio.filter(x => x === 'fail').length;
+  if (pend) return `<p class="row-meta gen"><span class="pulse"></span><span class="num">正在生成音频 ${n - pend}/${n}</span></p>`;
+  if (fail) return `<p class="row-meta fail"><span class="num">${fail} 句音频生成失败</span><button class="link" data-retry="${a.id}">重试</button></p>`;
+  if (a.finished) return `<p class="row-meta num">已学完 · 共 ${n} 句</p>`;
+  if (a.lastStudiedAt) return `<p class="row-meta num">上次学到第 ${a.lastIndex + 1} 句 · 共 ${n} 句</p>`;
+  return `<p class="row-meta num">未开始 · 共 ${n} 句</p>`;
+}
+const sortKey = a => a.lastStudiedAt || a.createdAt;
+const srcLine = it => byId(it.articleId)
+  ? `来自《${esc(it.articleTitle)}》第 ${it.index + 1} 句`
+  : `来自《${esc(it.articleTitle)}》（原文已删除）`;
+
+function renderList() {
+  $('#cntA').textContent = db.articles.length;
+  $('#cntS').textContent = db.savedS.length;
+  $('#cntW').textContent = db.savedW.length;
+  document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', t.dataset.tab === ui.tab));
+  const seg = $('#viewSeg');
+  seg.hidden = ui.tab === 'articles';
+  seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', ui.view[ui.tab] === b.dataset.view));
+  const body = $('#listBody');
+
+  if (ui.tab === 'articles') {
+    if (!db.articles.length) {
+      body.innerHTML = `<div class="empty"><h2>还没有文章</h2><p>粘贴一段英文，就可以开始逐句听读。</p><button class="btn primary" data-add>添加文章</button></div>`;
+      return;
+    }
+    const arts = [...db.articles].sort((a, b) => sortKey(b) - sortKey(a));
+    body.innerHTML = `<ul class="list">${arts.map(a => `
+      <li class="row">
+        <div class="row-main" role="button" tabindex="0" data-open="${a.id}">
+          <h3 class="row-title">${esc(a.title)}</h3>
+          <p class="row-prev">${esc(a.sents.map(s => s.text).join(' '))}</p>
+          ${statusOf(a)}
+        </div>
+      </li>`).join('')}</ul>`;
+    return;
+  }
+
+  if (ui.tab === 'sentences') {
+    if (!db.savedS.length) {
+      body.innerHTML = `<div class="empty"><h2>还没有收藏的句子</h2><p>在学习页把鼠标移到句子上，点星标即可收藏。</p></div>`;
+      return;
+    }
+    const compact = ui.view.sentences === 'compact';
+    body.innerHTML = `<div class="list">${[...db.savedS].sort((a, b) => b.savedAt - a.savedAt).map(s =>
+      compact && !ui.expanded.has(s.id) ? `
+      <div class="fav compact" data-expand="${s.id}">
+        <p class="fav-en">${esc(s.text)}</p>
+        <button class="ic ${playingFav === s.id ? 'on' : ''}" data-play="${s.id}" aria-label="${playingFav === s.id ? '停止' : '播放'}">${playingFav === s.id ? I.stop : I.play}</button>
+      </div>` : `
+      <div class="fav">
+        <p class="fav-en">${esc(s.text)}</p>
+        ${s.zhState === 'ok' ? `<p class="fav-zh">${esc(s.zh)}</p>`
+          : s.zhState === 'fail' ? `<p class="fav-zh muted">翻译失败 <button class="link" data-zhretry="${s.id}">重试</button></p>`
+          : `<p class="fav-zh muted">翻译中…</p>`}
+        <p class="fav-src">${srcLine(s)}</p>
+        <div class="fav-acts">
+          <button class="act ${playingFav === s.id ? 'on' : ''}" data-play="${s.id}">${playingFav === s.id ? I.stop + '停止' : I.play + '播放'}</button>
+          <button class="act" data-back="${s.id}" ${byId(s.articleId) ? '' : 'disabled'}>${I.open}回到原文</button>
+          <button class="act" data-unsave="${s.id}">${I.starOn}取消收藏</button>
+          ${compact ? `<button class="act" data-expand="${s.id}">收起</button>` : ''}
+        </div>
+      </div>`).join('')}</div>`;
+    return;
+  }
+
+  if (!db.savedW.length) {
+    body.innerHTML = `<div class="empty"><h2>还没有收藏的生词</h2><p>在学习页点击任意单词，即可查看释义并收藏。</p></div>`;
+    return;
+  }
+  const compactW = ui.view.words === 'compact';
+  body.innerHTML = `<div class="list">${[...db.savedW].sort((a, b) => b.savedAt - a.savedAt).map(w =>
+    compactW && !ui.expanded.has(w.id) ? `
+    <div class="fav compact" data-expand="${w.id}">
+      <span class="word-mid">${esc(w.word)}</span>
+      <button class="ic ${playingFav === w.id ? 'on' : ''}" data-play="${w.id}" aria-label="发音">${I.speaker}</button>
+    </div>` : `
+    <div class="fav">
+      <div class="word-line"><span class="word-big">${esc(w.word)}</span><span class="phon">${esc(w.phonetic)}</span></div>
+      <p class="def"><span class="pos">${esc(w.pos)}</span>${esc(w.meaning)}</p>
+      <p class="quote">${boldWord(w.sentence, w.word)}</p>
+      <p class="fav-src">${srcLine(w)}</p>
+      <div class="fav-acts">
+        <button class="act ${playingFav === w.id ? 'on' : ''}" data-play="${w.id}">${I.speaker}发音</button>
+        <button class="act" data-back="${w.id}" ${byId(w.articleId) ? '' : 'disabled'}>${I.open}回到原文</button>
+        <button class="act" data-unsave="${w.id}">${I.starOn}取消收藏</button>
+        ${compactW ? `<button class="act" data-expand="${w.id}">收起</button>` : ''}
+      </div>
+    </div>`).join('')}</div>`;
+}
+function boldWord(sentence, word) {
+  let done = false;
+  return esc(sentence).replace(WORD_RE, m => (!done && m.toLowerCase() === word.toLowerCase()) ? (done = true, `<b>${m}</b>`) : m);
+}
+
+/* 收藏项的模拟播放 */
+let playingFav = null, favTimer;
+function playFav(id) {
+  clearTimeout(favTimer);
+  if (playingFav === id) { playingFav = null; renderList(); return; }
+  playingFav = id; renderList();
+  const it = db.savedS.find(x => x.id === id) || db.savedW.find(x => x.id === id);
+  const ms = it.text ? it.text.split(' ').length * 330 / ui.speed + 600 : 900;
+  favTimer = setTimeout(() => { playingFav = null; renderList(); }, ms);
+}
+
+function removeSaved(kind, id) {
+  const list = kind === 's' ? db.savedS : db.savedW;
+  const i = list.findIndex(x => x.id === id);
+  const [item] = list.splice(i, 1);
+  return () => { list.splice(i, 0, item); refresh(); };
+}
+
+$('.tabs').onclick = e => { const t = e.target.closest('.tab'); if (t) { ui.tab = t.dataset.tab; renderList(); } };
+$('#viewSeg').onclick = e => {
+  const b = e.target.closest('[data-view]'); if (!b) return;
+  ui.view[ui.tab] = b.dataset.view; ui.expanded.clear(); renderList();
+};
+
+$('#listBody').onclick = e => {
+  const b = e.target.closest('button, [data-open], [data-expand]'); if (!b) return;
+  if (b.dataset.add != null) return openAdd();
+  if (b.dataset.retry) { e.stopPropagation(); const a = byId(+b.dataset.retry); a.audio = a.audio.map(x => x === 'fail' ? 'pend' : x); renderList(); return; }
+  if (b.dataset.open) return openArticle(byId(+b.dataset.open));
+  if (b.dataset.expand) {
+    const id = b.dataset.expand;
+    ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id);
+    return renderList();
+  }
+  if (b.dataset.play) return playFav(b.dataset.play);
+  if (b.dataset.back) {
+    const it = db.savedS.find(x => x.id === b.dataset.back) || db.savedW.find(x => x.id === b.dataset.back);
+    return (location.hash = `#/study/${it.articleId}?focus=${it.index}`);
+  }
+  if (b.dataset.unsave) {
+    const id = b.dataset.unsave, kind = id[0];
+    const undo = removeSaved(kind, id); renderList();
+    return toast('已取消收藏', { label: '撤销', fn: undo });
+  }
+  if (b.dataset.zhretry) { const s = db.savedS.find(x => x.id === b.dataset.zhretry); s.zhState = 'pending'; renderList(); fillSavedZh(s); }
+};
+
+$('#appMenuBtn').onclick = e => popMenu(e.currentTarget, [
+  { label: '导出备份', fn: () => toast('（原型）将下载 readio-backup-2026-10-30.json') },
+  { label: '导入备份', fn: () => confirmBox({ title: '导入备份', desc: '导入会覆盖当前所有数据，确定吗？', ok: '导入', danger: true, onOk: () => toast('（原型）此处会打开文件选择') }) },
+]);
+
+/* 文章详情弹窗：原文、本文收藏的生词、开始学习、修改标题、删除 */
+function openArticle(a) {
+  const el = openLayer(`<div class="scrim"><div class="dialog article" role="dialog" aria-modal="true" aria-labelledby="adT"></div></div>`);
+  const dlg = el.firstElementChild;
+  let editing = false;
+  const draw = () => {
+    const words = db.savedW.filter(w => w.articleId === a.id).sort((x, y) => x.index - y.index);
+    const savedSet = new Set(words.map(w => w.index + '|' + w.word.toLowerCase()));
+    let text = '', open = false;
+    a.sents.forEach((s, i) => {
+      if (i === 0 || s.para) { if (open) text += '</p>'; text += '<p>'; open = true; } else text += ' ';
+      text += esc(s.text).replace(WORD_RE, m => savedSet.has(i + '|' + m.toLowerCase()) ? `<span class="saved">${m}</span>` : m);
+    });
+    if (open) text += '</p>';
+    const btn = a.finished ? '重新学习' : a.lastStudiedAt ? `继续学习（第 ${a.lastIndex + 1} 句）` : '开始学习';
+    dlg.innerHTML = `
+      <div class="ad-head">
+        <h2 class="ad-title" id="adT">${editing
+          ? `<form data-rf><input class="input" name="t" maxlength="80" value="${esc(a.title)}" aria-label="标题"><button class="btn primary sm" data-save>保存</button><button type="button" class="btn ghost sm" data-cancel>取消</button></form>`
+          : `<span>${esc(a.title)}</span><button class="ic" data-rename aria-label="修改标题" title="修改标题">${I.edit}</button>`}</h2>
+        <button class="ic" data-x aria-label="关闭">${I.close}</button>
+      </div>
+      <div class="ad-meta">${statusOf(a)}</div>
+      <div class="ad-body">
+        <div class="ad-text">${text}</div>
+        <section class="ad-words">
+          <h3>本文收藏的生词 <span class="cnt num">${words.length}</span></h3>
+          ${words.length ? words.map(w => `
+            <div class="adw">
+              <div><span class="adw-word">${esc(w.word)}</span><span class="phon">${esc(w.phonetic)}</span>
+                <p class="def"><span class="pos">${esc(w.pos)}</span>${esc(w.meaning)}</p></div>
+              <div class="adw-acts">
+                <button class="ic" data-say aria-label="发音">${I.speaker}</button>
+                <button class="ic" data-goto="${w.index}" aria-label="回到原文" title="回到原文">${I.open}</button>
+              </div>
+            </div>`).join('') : `<p class="ad-empty">还没有收藏生词。学习时点击单词，就可以查看释义并收藏。</p>`}
+        </section>
+      </div>
+      <div class="ad-foot">
+        <button class="btn danger-text" data-del>删除文章</button>
+        <span class="spacer"></span>
+        <button class="btn primary" data-study>${btn}</button>
+      </div>`;
+    if (editing) { const f = dlg.querySelector('[data-rf]'); const ok = f.querySelector('[data-save]');
+      f.t.oninput = () => (ok.disabled = !f.t.value.trim()); setTimeout(() => f.t.select(), 0); }
+  };
+  draw();
+  el.addEventListener('click', e => {
+    if (e.target === el || e.target.closest('[data-x]')) return dismiss();
+    if (e.target.closest('[data-rename]')) { editing = true; return draw(); }
+    if (e.target.closest('[data-cancel]')) { editing = false; return draw(); }
+    if (e.target.closest('[data-study]')) { dismiss(); return (location.hash = `#/study/${a.id}`); }
+    const g = e.target.closest('[data-goto]');
+    if (g) { dismiss(); return (location.hash = `#/study/${a.id}?focus=${g.dataset.goto}`); }
+    const say = e.target.closest('[data-say]');
+    if (say) { say.classList.add('speaking'); return setTimeout(() => say.classList.remove('speaking'), 900); }
+    if (e.target.closest('[data-retry]')) { a.audio = a.audio.map(x => x === 'fail' ? 'pend' : x); return draw(); }
+    if (e.target.closest('[data-del]')) return confirmBox({
+      title: '删除这篇文章？', desc: '文章和音频会被删除，已收藏的句子和生词会保留。', ok: '删除', danger: true,
+      onOk: () => { db.articles = db.articles.filter(x => x !== a); dismiss(); renderList(); toast(`已删除《${a.title}》`); } });
+  });
+  el.addEventListener('submit', e => {
+    e.preventDefault(); const v = e.target.t.value.trim(); if (!v) return;
+    a.title = v; editing = false; draw(); renderList();
+  });
+  el._esc = () => (editing ? (editing = false, draw()) : dismiss());
+  el._redraw = () => !editing && draw();
+}
+
+/* 添加文章 */
+$('#addBtn').onclick = () => openAdd();
+function openAdd() {
+  const el = openLayer(`<div class="scrim"><form class="dialog" role="dialog" aria-modal="true" aria-labelledby="addH">
+    <h2 id="addH">添加文章</h2>
+    <label class="field"><span>标题（选填）</span><input class="input" name="title" maxlength="80" placeholder="不填则自动用第一句作为标题"></label>
+    <label class="field"><span>正文</span><textarea class="textarea" name="body" placeholder="粘贴英文文章"></textarea></label>
+    <div class="hint num" id="addHint"></div>
+    <div class="d-acts" data-main><button type="button" class="btn ghost" data-x>取消</button><button class="btn primary" data-ok disabled>保存</button></div>
+    <div class="d-acts" data-ask hidden><span style="margin-right:auto;align-self:center">放弃这篇文章？</span>
+      <button type="button" class="btn ghost" data-keep>继续编辑</button><button type="button" class="btn danger" data-drop>放弃</button></div>
+  </form></div>`);
+  const f = el.querySelector('form'), ok = f.querySelector('[data-ok]'), hint = f.querySelector('#addHint');
+  const ask = on => { f.querySelector('[data-main]').hidden = on; f.querySelector('[data-ask]').hidden = !on; };
+  f.querySelector('[data-keep]').onclick = () => { ask(false); f.body.focus(); };
+  f.querySelector('[data-drop]').onclick = () => dismiss();
+  let sents = [];
+  f.body.oninput = () => {
+    const v = f.body.value;
+    sents = v.trim() ? splitSentences(v) : [];
+    let msg = '', err = false;
+    if (!v.trim()) msg = '';
+    else if (!/[A-Za-z]/.test(v)) { msg = '没有识别到英文内容'; err = true; }
+    else if (sents.length > 300) { msg = `文章太长了，最多支持 300 句，当前约 ${sents.length} 句`; err = true; }
+    else msg = `约 ${sents.length} 句`;
+    hint.textContent = msg; hint.classList.toggle('err', err);
+    ok.disabled = !v.trim() || err;
+  };
+  const tryClose = () => f.body.value.trim() ? ask(true) : dismiss();
+  el.addEventListener('click', e => { if (e.target === el || e.target.closest('[data-x]')) { e.preventDefault(); tryClose(); } });
+  el._esc = tryClose;
+  f.onsubmit = e => {
+    e.preventDefault();
+    const id = Math.max(0, ...db.articles.map(a => a.id)) + 1;
+    db.articles.push({ id, title: f.title.value.trim() || autoTitle(sents[0].text), sents, zh: {}, lastIndex: 0,
+      finished: false, lastStudiedAt: null, createdAt: Date.now(), audio: sents.map(() => 'pend') });
+    dismiss(); ui.tab = 'articles'; location.hash = '#/'; renderList(); scrollTo(0, 0);
+  };
+  setTimeout(() => f.body.focus(), 0);
+}
+
+function openRename(a) {
+  const el = openLayer(`<div class="scrim"><form class="dialog small" role="dialog" aria-modal="true">
+    <h2>修改标题</h2>
+    <label class="field"><input class="input" name="t" maxlength="80" value="${esc(a.title)}"></label>
+    <div class="d-acts"><button type="button" class="btn ghost" data-x>取消</button><button class="btn primary" data-ok>保存</button></div>
+  </form></div>`);
+  const f = el.querySelector('form'), ok = f.querySelector('[data-ok]');
+  f.t.oninput = () => (ok.disabled = !f.t.value.trim());
+  el.addEventListener('click', e => { if (e.target === el || e.target.closest('[data-x]')) dismiss(); });
+  f.onsubmit = e => { e.preventDefault(); a.title = f.t.value.trim(); dismiss(); renderList(); };
+  setTimeout(() => f.t.select(), 0);
+}
+
+/* ==========================================================
+   学习页
+   ========================================================== */
+let st = null; // { a, cur, playing, waiting, timer, follow, open:Set, sel }
+
+function enterStudy(id, focus) {
+  leaveStudy();
+  const a = byId(id);
+  if (a.finished) { a.finished = false; a.lastIndex = 0; }
+  a.lastStudiedAt = Date.now();
+  st = { a, cur: focus != null ? focus : a.lastIndex, playing: false, waiting: false, timer: null, follow: true, open: new Set(),
+         flashI: focus, flashUntil: focus != null ? Date.now() + 2000 : 0 };
+  hovI = null;
+  a.lastIndex = st.cur;
+  $('#pageList').hidden = true; $('#pageStudy').hidden = false; document.body.classList.add('on-study');
+  $('#studyTitle').textContent = a.title; $('#docTitle').textContent = a.title;
+  renderSents(); renderPlayer();
+  requestAnimationFrame(() => {
+    if (focus != null) {
+      scrollToCur(false);
+    } else if (st.cur > 0) scrollToCur(false);
+    else scrollTo(0, 0);
+  });
+}
+function leaveStudy() { if (st) { clearTimeout(st.timer); st = null; } hovI = null; $('#followBtn').hidden = true; $('#sbar').hidden = true; }
+
+const sentEl = i => document.querySelector(`.sx[data-i="${i}"]`);
+const savedSent = (a, i) => db.savedS.find(s => s.articleId === a.id && s.index === i);
+const savedWord = (a, i, w) => db.savedW.find(x => x.articleId === a.id && x.index === i && x.word.toLowerCase() === w.toLowerCase());
+const TOUCH = matchMedia('(hover: none)').matches;
+
+/* 段落模式：句子在段落里连续排列；整篇重绘（文章最多 300 句，开销可以忽略） */
+function renderSents() {
+  const a = st.a;
+  let html = '', open = false;
+  a.sents.forEach((s, i) => {
+    if (i === 0 || s.para) { if (open) html += '</p>'; html += '<p class="para">'; open = true; }
+    else html += ' ';
+    const words = esc(s.text).replace(WORD_RE, m =>
+      `<span class="w${savedWord(a, i, m) ? ' saved' : ''}" data-w="${m}">${m}</span>`);
+    const cls = ['sx', i === st.cur && 'cur', i === hovI && 'hov', i === st.flashI && Date.now() < st.flashUntil && 'flash'].filter(Boolean).join(' ');
+    html += `<span class="${cls}" data-i="${i}">${words}${savedSent(a, i) ? `<span class="mini-star" aria-label="已收藏">${I.starOn}</span>` : ''}</span>${zhHtml(i)}`;
+  });
+  if (open) html += '</p>';
+  $('#sents').innerHTML = html;
+  drawBar();
+}
+function zhHtml(i) {
+  if (!st.open.has(i)) return '';
+  const z = st.a.zh[i];
+  if (z === '__loading') return `<span class="sx-zh muted">翻译中…</span>`;
+  if (z === '__fail') return `<span class="sx-zh muted">翻译失败 <button class="link" data-trretry="${i}">重试</button></span>`;
+  return `<span class="sx-zh">${esc(z)}</span>`;
+}
+const updateSent = () => renderSents();
+
+/* 句子工具条：电脑上悬停时出现在该句末尾上方；触屏设备固定显示在当前句 */
+let hovI = null, hideT, switchT;
+const cardOpen = () => !!layer.querySelector('.wcard');
+const barIndex = () => (hovI != null ? hovI : (TOUCH && st ? st.cur : null));
+function drawBar() {
+  const bar = $('#sbar'), i = st ? barIndex() : null;
+  if (i == null || !sentEl(i)) { bar.hidden = true; return; }
+  const on = !!savedSent(st.a, i);
+  bar.innerHTML = `
+    <button class="ic" data-act="play" aria-label="从这句开始播放" title="从这句开始播放">${I.play}</button>
+    <button class="ic tr ${st.open.has(i) ? 'on' : ''}" data-act="tr" aria-label="翻译" title="翻译 (T)">译</button>
+    <button class="ic star ${on ? 'on' : ''}" data-act="star" aria-label="${on ? '取消收藏' : '收藏句子'}" title="收藏句子 (S)">${on ? I.starOn : I.star}</button>`;
+  bar.dataset.i = i; bar.hidden = false;
+  // 位置：句子第一行的开头上方；上方空间不够时放到最后一行下方
+  const rects = sentEl(i).getClientRects(), first = rects[0], last = rects[rects.length - 1];
+  const w = bar.offsetWidth, h = bar.offsetHeight;
+  let top = first.top + scrollY - h - 4;
+  if (first.top - h - 4 < 64) top = last.bottom + scrollY + 4;
+  const col = $('#sents').getBoundingClientRect();
+  const left = Math.max(col.left + scrollX - 6, Math.min(first.left + scrollX - 6, col.right + scrollX - w));
+  bar.style.top = top + 'px'; bar.style.left = left + 'px';
+}
+function setHover(i) {
+  if (hovI === i) return;
+  sentEl(hovI)?.classList.remove('hov');
+  hovI = i; sentEl(i)?.classList.add('hov');
+  drawBar();
+}
+function clearHover() { sentEl(hovI)?.classList.remove('hov'); hovI = null; drawBar(); }
+$('#sents').addEventListener('mouseover', e => {
+  if (TOUCH || !st) return;
+  const sx = e.target.closest('.sx'); if (!sx || cardOpen()) return;
+  clearTimeout(hideT); clearTimeout(switchT);
+  const i = +sx.dataset.i;
+  // 从一句移到另一句时稍等片刻，方便鼠标经过别的句子移到工具条上
+  if (hovI == null) setHover(i); else if (hovI !== i) switchT = setTimeout(() => setHover(i), 160);
+});
+$('#sents').addEventListener('mouseout', e => {
+  if (TOUCH || !st) return;
+  const to = e.relatedTarget;
+  if (to && to.closest && (to.closest(`.sx[data-i="${hovI}"]`) || to.closest('#sbar'))) return;
+  hideT = setTimeout(clearHover, 220);
+});
+$('#sbar').addEventListener('mouseenter', () => { clearTimeout(hideT); clearTimeout(switchT); });
+$('#sbar').addEventListener('mouseleave', e => {
+  if (e.relatedTarget?.closest?.(`.sx[data-i="${hovI}"]`)) return;
+  hideT = setTimeout(clearHover, 220);
+});
+$('#sbar').onclick = e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const i = +$('#sbar').dataset.i;
+  if (b.dataset.act === 'play') { st.follow = true; $('#followBtn').hidden = true; playFrom(i); }
+  if (b.dataset.act === 'tr') toggleTr(i);
+  if (b.dataset.act === 'star') toggleStar(i);
+};
+addEventListener('resize', () => st && drawBar());
+
+function renderPlayer() {
+  const a = st.a, n = a.sents.length;
+  $('#ticks').innerHTML = a.audio.map((x, i) =>
+    `<span class="tk ${x === 'pend' ? 'pend' : x === 'fail' ? 'fail' : ''} ${i === st.cur ? 'cur' : ''}" data-i="${i}" title="第 ${i + 1} 句"><i></i></span>`).join('');
+  $('#pPos').innerHTML = `${st.cur + 1} / ${n}${st.waiting ? '<small>等待音频…</small>' : ''}`;
+  const playBtn = $('#playBtn');
+  playBtn.innerHTML = st.playing ? I.pause : I.play;
+  playBtn.setAttribute('aria-label', st.playing ? '暂停' : '播放');
+  $('#prevBtn').disabled = st.cur === 0;
+  $('#nextBtn').disabled = st.cur === n - 1;
+  $('#speedBtn').textContent = ui.speed.toFixed(1) + '×';
+  const pend = a.audio.filter(x => x === 'pend').length;
+  $('#studyAudio').textContent = pend ? `音频 ${n - pend}/${n}` : '';
+}
+
+function setCur(i, scroll = true) {
+  const prev = st.cur;
+  st.cur = i; st.a.lastIndex = i;
+  sentEl(prev)?.classList.remove('cur');
+  sentEl(i)?.classList.add('cur');
+  renderPlayer();
+  if (TOUCH) drawBar();
+  if (scroll && st.follow) scrollToCur(true);
+}
+let progUntil = 0;
+function scrollToCur(smooth) {
+  const el = sentEl(st.cur); if (!el) return;
+  const r = el.getBoundingClientRect();
+  const visible = r.top > 70 && r.bottom < innerHeight - 140;
+  if (visible && smooth) return;
+  progUntil = Date.now() + 900;
+  scrollTo({ top: scrollY + r.top - innerHeight * 0.3, behavior: smooth ? 'smooth' : 'auto' });
+}
+
+/* 模拟播放：每句时长按单词数估算 */
+function playFrom(i) {
+  clearTimeout(st.timer);
+  st.playing = true; st.waiting = false;
+  setCur(i);
+  const state = st.a.audio[i];
+  if (state === 'pend') { st.waiting = true; renderPlayer(); return; }
+  if (state === 'fail') {
+    toast(`第 ${i + 1} 句音频生成失败`, { label: '重试', fn: () => { st && (st.a.audio[i] = 'pend', renderPlayer()); } });
+    return next();
+  }
+  renderPlayer();
+  const ms = (st.a.sents[i].text.split(' ').length * 330 + 500) / ui.speed;
+  st.timer = setTimeout(next, ms);
+  function next() {
+    if (!st) return;
+    if (st.cur < st.a.sents.length - 1) st.timer = setTimeout(() => playFrom(st.cur + 1), 300);
+    else { st.playing = false; st.a.finished = true; renderPlayer(); toast('已读完这篇文章'); }
+  }
+}
+function pause() { clearTimeout(st.timer); st.playing = false; st.waiting = false; renderPlayer(); }
+function toggle() { st.playing ? pause() : playFrom(st.cur); }
+function step(d) {
+  const i = st.cur + d; if (i < 0 || i >= st.a.sents.length) return;
+  st.follow = true; $('#followBtn').hidden = true;
+  st.playing ? playFrom(i) : setCur(i);
+}
+
+$('#playBtn').onclick = toggle;
+$('#prevBtn').onclick = () => step(-1);
+$('#nextBtn').onclick = () => step(1);
+$('#backBtn').onclick = () => (location.hash = '#/');
+$('#ticks').onclick = e => { const t = e.target.closest('.tk'); if (!t) return; const i = +t.dataset.i; st.follow = true; st.playing ? playFrom(i) : setCur(i); };
+$('#followBtn').onclick = () => { st.follow = true; $('#followBtn').hidden = true; scrollToCur(true); };
+$('#speedBtn').onclick = e => {
+  const opts = [0.6, 0.8, 1.0, 1.2, 1.5].map(v => ({ label: v.toFixed(1) + '×', cls: v === ui.speed ? 'sel' : '', fn: () => { ui.speed = v; renderPlayer(); } }));
+  opts.above = true;
+  popMenu(e.currentTarget, opts);
+};
+
+addEventListener('scroll', () => {
+  if (!st) return;
+  $('#studyTop').classList.toggle('scrolled', scrollY > 4);
+  if (st.playing && Date.now() > progUntil && st.follow) { st.follow = false; $('#followBtn').hidden = false; }
+}, { passive: true });
+
+/* 正文点击：单词查词；译文里的「重试」 */
+$('#sents').onclick = e => {
+  const r = e.target.closest('[data-trretry]');
+  if (r) { const i = +r.dataset.trretry; st.a.zh[i] = undefined; st.open.delete(i); return toggleTr(i); }
+  const w = e.target.closest('.w'); if (!w) return;
+  lookup(w, +w.closest('.sx').dataset.i);
+};
+
+function toggleTr(i) {
+  if (st.open.has(i)) { st.open.delete(i); return updateSent(i); }
+  st.open.add(i);
+  const a = st.a;
+  if (a.zh[i] && !a.zh[i].startsWith('__')) return updateSent(i);
+  a.zh[i] = '__loading'; updateSent(i);
+  setTimeout(() => {
+    a.zh[i] = ui.failTrans ? '__fail' : (MOCK_ZH(a, i));
+    if (st && st.a === a) updateSent(i);
+  }, 700);
+}
+const MOCK_ZH = (a, i) => `（原型示例译文）这里显示第 ${i + 1} 句的中文翻译。`;
+
+function toggleStar(i) {
+  const a = st.a, ex = savedSent(a, i);
+  if (ex) { db.savedS = db.savedS.filter(x => x !== ex); updateSent(i); return toast('已取消收藏'); }
+  const z = a.zh[i] && !a.zh[i].startsWith('__') ? a.zh[i] : null;
+  const item = { id: 's' + Date.now(), text: a.sents[i].text, zh: z, zhState: z ? 'ok' : 'pending', articleId: a.id, articleTitle: a.title, index: i, savedAt: Date.now() };
+  db.savedS.push(item);
+  if (!z) fillSavedZh(item);
+  updateSent(i); toast('已收藏句子');
+}
+function fillSavedZh(item) {
+  setTimeout(() => {
+    if (ui.failTrans) item.zhState = 'fail';
+    else {
+      item.zh = item.id === 's1' ? '你也许在纸面上认得一个词，在对话中却完全听不出来。' : MOCK_ZH(null, item.index);
+      item.zhState = 'ok';
+    }
+    if (!st) renderList();
+  }, 2500);
+}
+
+/* 查词卡片 */
+function lookup(wEl, i) {
+  if (st.playing) pause();
+  clearTimeout(switchT); clearHover();
+  const word = wEl.dataset.w;
+  document.querySelectorAll('.w.sel').forEach(x => x.classList.remove('sel'));
+  wEl.classList.add('sel');
+  const card = openLayer(`<div class="wcard" role="dialog" aria-label="查词">
+    <div class="wc-head"><span class="wc-word">${esc(word)}</span></div>
+    <div class="sk" style="width:40%"></div><div class="sk" style="width:90%"></div><div class="sk" style="width:70%"></div>
+  </div>`, () => wEl.classList.remove('sel'));
+  place(card, wEl);
+  setTimeout(() => {
+    if (!card.isConnected) return;
+    if (ui.failLookup) {
+      card.innerHTML = `<div class="wc-head"><span class="wc-word">${esc(word)}</span></div>
+        <p class="wc-def" style="color:var(--ink-3)">查询失败 <button class="link" data-r>重试</button></p>`;
+      card.querySelector('[data-r]').onclick = () => lookup(wEl, i);
+      return place(card, wEl);
+    }
+    const d = DICT[word.toLowerCase()] || ['/—/', '', '（原型示例）这里显示这个词在本句中的中文意思。'];
+    const draw = () => {
+      const on = !!savedWord(st.a, i, word);
+      card.innerHTML = `
+        <div class="wc-head"><span class="wc-word">${esc(word)}</span><button class="ic" data-say aria-label="发音">${I.speaker}</button></div>
+        <div class="wc-meta"><span>${esc(d[0])}</span>${d[3] ? `<span>原形 ${esc(d[3])}</span>` : ''}</div>
+        <div class="wc-def">${d[1] ? `<span class="pos">${esc(d[1])}</span>` : ''}${esc(d[2])}</div>
+        <div class="wc-acts">
+          <button class="btn ${on ? 'ghost' : 'primary'} sm" data-save>${on ? I.starOn.replace('<svg', '<svg width="15" height="15"') + '已收藏' : '收藏生词'}</button>
+        </div>`;
+      card.querySelector('[data-say]').onclick = ev => { const b = ev.currentTarget; b.classList.add('speaking'); setTimeout(() => b.classList.remove('speaking'), 900); };
+      card.querySelector('[data-save]').onclick = () => {
+        const ex = savedWord(st.a, i, word);
+        if (ex) { db.savedW = db.savedW.filter(x => x !== ex); toast('已取消收藏'); }
+        else {
+          db.savedW.push({ id: 'w' + Date.now(), word, lemma: d[3] || null, phonetic: d[0], pos: d[1], meaning: d[2], sentence: st.a.sents[i].text, articleId: st.a.id, articleTitle: st.a.title, index: i, savedAt: Date.now() });
+          toast('已收藏生词');
+        }
+        document.querySelectorAll(`.sx[data-i="${i}"] .w`).forEach(x => {
+          if (x.dataset.w.toLowerCase() === word.toLowerCase()) x.classList.toggle('saved', !ex);
+        });
+        draw();
+      };
+    };
+    draw(); place(card, wEl);
+  }, 550);
+}
+function place(card, anchor) {
+  if (innerWidth <= 640) return; // 窄屏为底部弹出，由 CSS 控制
+  const r = anchor.getBoundingClientRect();
+  const w = card.offsetWidth, h = card.offsetHeight;
+  let top = r.bottom + scrollY + 8;
+  if (r.bottom + 8 + h > innerHeight - 130) top = r.top + scrollY - h - 8;
+  card.style.top = top + 'px';
+  card.style.left = Math.max(12, Math.min(r.left + scrollX - 16, innerWidth - w - 12)) + 'px';
+}
+
+/* 点击外部关闭浮层 */
+document.addEventListener('mousedown', e => {
+  const el = layer.firstElementChild; if (!el || layer2.innerHTML) return;
+  if (el.classList.contains('scrim')) return;
+  if (!el.contains(e.target) && !e.target.closest('.w')) dismiss();
+});
+
+/* 键盘 */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches?.('.row-main')) return openArticle(byId(+e.target.dataset.open));
+  if (e.key === 'Escape') {
+    if (layer2.innerHTML) return dismiss2();
+    const el = layer.firstElementChild;
+    if (el?._esc) return el._esc();
+    return dismiss();
+  }
+  if (isTyping(e) || !st || layer.querySelector('.scrim')) return;
+  if (e.key === ' ') { e.preventDefault(); toggle(); }
+  else if (e.key === 'ArrowLeft') step(-1);
+  else if (e.key === 'ArrowRight') step(1);
+  else if (e.key.toLowerCase() === 't') toggleTr(st.cur);
+  else if (e.key.toLowerCase() === 's') toggleStar(st.cur);
+});
+
+/* ==========================================================
+   模拟后台音频生成：每 0.6 秒完成一句
+   ========================================================== */
+setInterval(() => {
+  let changed = false;
+  db.articles.forEach(a => {
+    const k = a.audio.indexOf('pend');
+    if (k >= 0) { a.audio[k] = 'ok'; changed = true; }
+  });
+  if (!changed) return;
+  if (st) {
+    renderPlayer();
+    if (st.waiting && st.a.audio[st.cur] === 'ok') playFrom(st.cur);
+  } else if (ui.tab === 'articles' && !layer.querySelector('.scrim')) renderList();
+  else layer.firstElementChild?._redraw?.();
+}, 600);
+
+/* 原型面板 */
+$('#protoBtn').onclick = () => ($('#proto').hidden = !$('#proto').hidden);
+$('#pfLookup').onchange = e => (ui.failLookup = e.target.checked);
+$('#pfTrans').onchange = e => (ui.failTrans = e.target.checked);
+$('#pfDark').onchange = e => document.documentElement.setAttribute('data-theme', e.target.checked ? 'dark' : 'light');
+$('#pfEmpty').onclick = () => { db = { articles: [], savedS: [], savedW: [] }; location.hash = '#/'; renderList(); };
+$('#pfReset').onclick = () => { db = seed(); location.hash = '#/'; renderList(); };
+function refresh() { st ? renderSents() : renderList(); }
+
+/* 首次进入：示例里那句"翻译中"的收藏 2.5 秒后完成 */
+fillSavedZh(db.savedS[0]);
+route();
+</script>
+</body>
+</html>

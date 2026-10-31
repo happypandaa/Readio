@@ -1,0 +1,50 @@
+/* =========================================================
+   设计令牌（实现时请原样迁移到 src/styles/tokens.css）
+   ========================================================= */
+:root {
+  --paper: #F3F5F2;      /* 页面底色：冷调纸白 */
+  --surface: #FFFFFF;    /* 弹窗、卡片、播放栏 */
+  --ink: #1A2120;        /* 主文字 */
+  --ink-2: #56605C;      /* 次要文字：译文、预览 */
+  --ink-3: #8C9692;      /* 弱文字：序号、来源、说明 */
+  --line: #DCE1DD;       /* 分隔线、边框 */
+  --hover: rgba(26, 33, 32, .045);
+  --dial: #2643A6;       /* 强调色：按钮、当前句竖条、刻度 */
+  --dial-soft: rgba(38, 67, 166, .10);
+  --band: #E6EBF8;       /* 当前句背景 */
+  --mark: #C08408;       /* 收藏星标 */
+  --danger: #B3261E;
+  --tick: #B9C2BE;       /* 已生成音频的刻度 */
+  --tick-off: #E1E5E2;   /* 未生成音频的刻度 */
+  --scrim: rgba(18, 24, 22, .42);
+  --shadow: 0 14px 36px rgba(18, 28, 40, .16), 0 2px 6px rgba(18, 28, 40, .06);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-en: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+
+  --r-sm: 6px;   /* 小按钮、单词选中 */
+  --r-md: 10px;  /* 按钮、句子行、输入框 */
+  --r-lg: 14px;  /* 弹窗、查词卡片 */
+
+  --col: 680px;  /* 阅读列宽 */
+  --player-h: 112px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131716; --surface: #1B201F; --ink: #E6EAE8; --ink-2: #A7B0AC; --ink-3: #737D79;
+    --line: #2C3331; --hover: rgba(230, 234, 232, .05);
+    --dial: #8FA6F2; --dial-soft: rgba(143, 166, 242, .14); --band: #1F2A45;
+    --mark: #E2A93B; --danger: #F08A80; --tick: #4A5450; --tick-off: #262C2A;
+    --scrim: rgba(0, 0, 0, .55); --shadow: 0 14px 36px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #131716; --surface: #1B201F; --ink: #E6EAE8; --ink-2: #A7B0AC; --ink-3: #737D79;
+  --line: #2C3331; --hover: rgba(230, 234, 232, .05);
+  --dial: #8FA6F2; --dial-soft: rgba(143, 166, 242, .14); --band: #1F2A45;
+  --mark: #E2A93B; --danger: #F08A80; --tick: #4A5450; --tick-off: #262C2A;
+  --scrim: rgba(0, 0, 0, .55); --shadow: 0 14px 36px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
