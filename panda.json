@@ -7,7 +7,7 @@
     "description": "个人英语听读：逐句音频、翻译查词、句子与生词收藏。"
   },
   "web": { "root": "dist", "entry": "index.html" },
-  "backend": { "root": ".", "entry": "managed.mjs", "nodeMajor": 24, "protocolVersion": 1 },
+  "backend": { "root": ".", "entry": "managed.mjs", "nodeMajor": 24, "protocolVersion": 1, "apiPrefixes": ["/v1"] },
   "configuration": {
     "version": 1,
     "fields": [
