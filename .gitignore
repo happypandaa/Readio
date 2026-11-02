@@ -1,5 +1,4 @@
 node_modules/
-dist/
 .env
 .env.*
 !.env.example
@@ -7,3 +6,4 @@ dist/
 .DS_Store
 readio-backup-*.json
 backups/
+data/

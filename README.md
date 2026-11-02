@@ -4,9 +4,15 @@
 
 已实现完整 v1，包括文章管理、逐句音频与进度恢复、翻译查词、句子与生词收藏，以及 P1 的 JSON 导出/导入备份。样式与类名从原型迁移，没有原型面板。
 
-## 配置与启动
+## 平台接入（熊猫小抽屉）
 
-需要 Node 20.6 或更高版本。项目使用 React 18、Vite 6，并只使用技术方案列出的依赖；JSX 由 Vite 内置转换，不额外安装 React 插件。
+本应用是 Node 应用（`runtime: node`），通过根目录 `panda.json` 声明入口和配置。前端为 Vite 构建产物（`dist/`），后端 `managed.mjs` 遵守平台控制协议。平台规则见熊猫小抽屉随附的 skill。
+
+在平台「添加本地项目」选择本目录，或「从 Git 添加」本仓库。两把密钥（DeepSeek、豆包）在平台配置表单填写，由平台注入后端，无需维护 `.env`。模型、资源 ID 和音色使用内置默认值，如需修改请改代码。
+
+## 本地开发
+
+需要 Node 20.6 或更高版本。项目使用 React 18、Vite 6，JSX 由 Vite 内置转换。
 
 ```sh
 npm install
@@ -15,7 +21,7 @@ cp .env.example .env
 npm run dev
 ```
 
-真实密钥不包含在仓库中。首次运行时复制 `.env.example` 为 `.env`，填写以下配置，然后启动或重启服务；已有 `.env` 时保留现有配置：
+本地开发才使用 `.env`；平台运行不读取 `.env`。真实密钥不包含在仓库中。
 
 ```dotenv
 PORT=8787
@@ -26,11 +32,11 @@ DOUBAO_RESOURCE_ID=seed-tts-2.0
 DOUBAO_VOICE=en_female_zendaya_p1_uranus_bigtts
 ```
 
-只有 `DEEPSEEK_API_KEY` 和 `DOUBAO_API_KEY` 必填。豆包使用新版语音控制台「API Key 管理」中的 Key，无需 AppID；旧版 Access Token 不能代替新版 API Key。默认资源是 `seed-tts-2.0`，默认音色 Zendaya 是美式英语女声，官方列为教学场景。资源和音色均可省略，服务端会采用这些默认值。缺少密钥时后端会列出缺失项并退出。修改 `.env` 后重新运行 `npm run dev`。
+只有 `DEEPSEEK_API_KEY` 和 `DOUBAO_API_KEY` 必填。豆包使用新版语音控制台「API Key 管理」中的 Key，无需 AppID。默认资源是 `seed-tts-2.0`，默认音色 Zendaya 是美式英语女声。资源和音色均可省略，服务端会采用默认值。
 
 - 页面：[http://localhost:5173](http://localhost:5173)
-- 后端：[http://127.0.0.1:8787](http://127.0.0.1:8787)。开发时页面请求 `/v1`，由 Vite 代理给后端；修改 `PORT` 后代理也会使用新端口。
-- 密钥仅由 Node 读取，不带 `VITE_` 前缀，不进入前端构建。`.env` 已加入 `.gitignore`。请不要将密钥粘贴到浏览器控制台。
+- 后端：[http://127.0.0.1:8787](http://127.0.0.1:8787)。开发时页面请求 `/v1`，由 Vite 代理给后端。
+- 密钥仅由 Node 读取，不带 `VITE_` 前缀，不进入前端构建。
 
 ## 验证两个真实接口
 
