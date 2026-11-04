@@ -123,3 +123,7 @@ npm run test:browser
 
 - DeepSeek 原默认模型 `deepseek-chat` 已停用，改为当前 `deepseek-flash`，模型仍可通过 `.env` 修改。[官方模型调用说明](https://api-docs.deepseek.com/quick_start/)、[旧模型停用公告](https://api-docs.deepseek.com/news/news260424/)。
 - 豆包使用支持新版 API Key 的 V3，使用 `X-Api-Key`、`X-Api-Resource-Id` 和 `X-Api-Request-Id`，无需旧版 AppID/Token/Cluster；前端输入输出格式保持原方案约定。`code=0` 的音频逐片合并，`code=20000000` 结束帧作为成功处理。原 V1 的 1024 字节限制不再沿用。[V3 官方文档](https://docs.volcengine.com/docs/doubao-voice/unidirectional-streaming-text-to-speech-http?lang=zh)、[完整分帧说明](https://docs.volcengine.com/docs/doubao-voice/http-chunked-sse-unidirectional-streaming-v3?lang=zh)、[官方音色表](https://docs.volcengine.com/docs/DoubaoVoice/Tonelist-1?lang=zh)。
+
+## 开源许可证
+
+本项目采用 [MIT License](LICENSE) 开源。
