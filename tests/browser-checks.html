@@ -22,8 +22,9 @@ import db, { addArticle, renameArticle, deleteArticle, touchArticle, setLastInde
   ensureBuiltinArticles } from '/src/db.js';
 import { builtinArticles } from '/src/builtinArticles.js';
 import { splitSentences, tokenize } from '/src/text.js';
-import { translateSentence, translateSavedSentence, lookupWord } from '/src/api.js';
-import { start, reset, stopArticle, retryFailed, ensureAudio } from '/src/audioQueue.js';
+import { translateSentence, translateSavedSentence, translateArticle, lookupWord } from '/src/api.js';
+import { start, reset, stopArticle, retryFailed, generateArticle, ensureAudio } from '/src/audioQueue.js';
+import Dexie from 'dexie';
 import { exportBackup, readBackup, validateBackup, importBackup } from '/src/backup.js';
 
 const status = document.querySelector('#status');
@@ -175,7 +176,7 @@ async function run() {
         assert(sentences.length > 1 && sentences.length <= 300);
         const audios = await db.audios.where('articleId').equals(article.id).toArray();
         equal(audios.length, sentences.length, '每句创建一个音频记录');
-        assert(audios.every(row => row.status === 'pending' && !row.blob), '初始化仅入库，不发起生成');
+        assert(audios.every(row => row.status === 'none' && !row.blob), '内置文章标记为未生成，等待用户手动生成');
       }
       equal(speechLogs().length, requests, '内置文章初始化不得隐式调用语音接口');
       equal(await getSetting('builtinArticles', []), builtinArticles.map(article => article.key));
@@ -330,6 +331,73 @@ async function run() {
       equal(speechLogs().length, 2);
     });
 
+    await test('不勾选生成时只入库为未生成，打开应用不生成，手动生成补齐整篇', async () => {
+      const articleId = await addArticle('Manual audio', 'Manual first sentence. Manual second sentence.', { generateAudio: false });
+      equal((await db.audios.where('articleId').equals(articleId).toArray()).map(row => row.status), ['none', 'none']);
+      await start();
+      await sleep(400);
+      equal(speechLogs().length, 0, '未生成的文章不得自动请求语音');
+      await rejects(() => ensureAudio(`s:${articleId}:0`, 'Manual first sentence.'), '还没有生成音频');
+      await generateArticle(articleId);
+      await audioReady(articleId);
+      equal(speechLogs().map(log => log.text), ['Manual first sentence.', 'Manual second sentence.']);
+      const autoId = await addArticle('Auto audio', 'Auto audio sentence.');
+      await audioReady(autoId);
+      equal(speechLogs().at(-1).text, 'Auto audio sentence.', '默认保存后自动生成');
+    });
+
+    await test('升级到v2：从未开始的文章改为未生成，已开始的保留待生成', async () => {
+      db.close();
+      await Dexie.delete('readio');
+      const legacy = new Dexie('readio');
+      legacy.version(1).stores({ articles: '++id, sortAt', sentences: '[articleId+idx], articleId', audios: 'key, articleId, status',
+        lookups: 'key', savedSentences: '++id, createdAt, [articleId+idx]', savedWords: '++id, createdAt, [articleId+idx]', settings: 'key' });
+      await legacy.open();
+      await legacy.table('audios').bulkAdd([
+        { key: 's:1:0', articleId: 1, status: 'pending' }, { key: 's:1:1', articleId: 1, status: 'pending' },
+        { key: 's:2:0', articleId: 2, status: 'ok', blob: new Blob(['a'], { type: 'audio/mpeg' }) }, { key: 's:2:1', articleId: 2, status: 'pending' },
+        { key: 's:3:0', articleId: 3, status: 'stopped' }, { key: 's:3:1', articleId: 3, status: 'pending' },
+        { key: 'w:hello', articleId: null, status: 'ok', blob: new Blob(['a'], { type: 'audio/mpeg' }) },
+      ]);
+      legacy.close();
+      await db.open();
+      const statuses = Object.fromEntries((await db.audios.toArray()).map(row => [row.key, row.status]));
+      equal(statuses, { 's:1:0': 'none', 's:1:1': 'none', 's:2:0': 'ok', 's:2:1': 'pending', 's:3:0': 'stopped', 's:3:1': 'pending', 'w:hello': 'ok' });
+    });
+
+    await test('整篇翻译只补未翻译句子，按组请求，格式错误逐句兜底，可停止', async () => {
+      const texts = Array.from({ length: 12 }, (_, index) => `Batch sentence number ${index + 1}.`);
+      const article = await silentArticle('Batch', texts.join(' '));
+      const sentences = await byArticle(article.id);
+      await db.sentences.update([article.id, 3], { zh: '已有译文' });
+      await toggleSavedSentence(article, await db.sentences.get([article.id, 5]));
+      await until(async () => (await db.savedSentences.toArray())[0]?.zhStatus === 'ok', '收藏后台翻译完成');
+      await db.savedSentences.toCollection().modify({ zh: null, zhStatus: 'pending' });
+      await db.sentences.update([article.id, 5], { zh: null });
+      logs.length = 0;
+      equal(await translateArticle(article.id), 0);
+      const after = await byArticle(article.id);
+      assert(after.every(row => row.zh), '全部句子都有译文');
+      equal(after[3].zh, '已有译文', '已有译文不重翻');
+      equal(logs.filter(log => log.kind === 'lookup').length, 2, '11 句分 2 组请求');
+      equal((await db.savedSentences.toArray())[0].zhStatus, 'ok', '收藏同步更新译文');
+      equal(sentences.length, 12);
+
+      const broken = await silentArticle('Broken', 'Broken batch first. Broken batch second.');
+      logs.length = 0;
+      equal(await translateArticle(broken.id), 0);
+      equal(logs.filter(log => log.kind === 'translation').length, 2, '格式错误时逐句翻译');
+      assert((await byArticle(broken.id)).every(row => row.zh));
+
+      const slow = await silentArticle('Slow', Array.from({ length: 30 }, (_, index) => `Slow batch ${index + 1}.`).join(' '));
+      const controller = new AbortController();
+      const task = translateArticle(slow.id, { signal: controller.signal }).then(() => null, error => error);
+      await until(() => logs.some(log => log.text?.includes('Slow batch')), '整篇翻译已发出');
+      controller.abort();
+      equal((await task)?.name, 'AbortError');
+      equal((await byArticle(slow.id)).filter(row => row.zh).length, 0, '停止后不写回');
+    });
+
     await test('句子翻译、语境查词缓存以及JSON字段与关闭thinking契约', async () => {
       const article = await silentArticle('Cache', 'A quiet cache example.');
       const [sentence] = await byArticle(article.id);
@@ -413,7 +481,12 @@ async function run() {
       await importBackup(exported);
       equal(await db.articles.count(), 1);
       equal(await getSetting('speed', 1), 0.8);
-      equal((await db.audios.toArray()).map(row => row.status), ['pending']);
+      equal((await db.audios.toArray()).map(row => row.status), ['none'], '导入后音频为未生成，不自动请求');
+      const beforeGenerate = speechLogs().filter(log => log.text === 'Backup source example.').length;
+      await start();
+      await sleep(400);
+      equal(speechLogs().filter(log => log.text === 'Backup source example.').length, beforeGenerate, '导入后打开应用不自动生成');
+      await generateArticle(article.id);
       await audioReady(article.id);
       equal(await businessSnapshot(), exported.data);
       const before = await businessSnapshot();
@@ -453,6 +526,7 @@ async function run() {
       const article = await db.articles.get(articleId);
       const replacement = [{ articleId, idx: 0, text: 'Replacement audio isolation example.', paraStart: false, zh: null }];
       await importBackup(makeBackup({ ...article, title: 'Replacement' }, replacement));
+      await generateArticle(articleId);
       await audioReady(articleId);
       const ready = await db.audios.get(`s:${articleId}:0`);
       await sleep(2750);

@@ -95,3 +95,7 @@ body.on-study .toast { bottom: calc(var(--player-h) + 16px + env(safe-area-inset
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* 添加文章：保存后生成音频 */
+.check { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-size: 14px; color: var(--ink-2); cursor: pointer; }
+.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--dial); cursor: pointer; }

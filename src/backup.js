@@ -94,10 +94,11 @@ export function validateBackup(input) {
     const settingKeys = new Set();
     for (const row of settings) {
       fields(row, ['key', 'value']);
-      requireValid(['speed', 'lastTab', 'favView', 'builtinArticles'].includes(row.key));
+      requireValid(['speed', 'lastTab', 'favView', 'builtinArticles', 'autoGenerateAudio', 'showTranslations'].includes(row.key));
       unique(settingKeys, row.key);
       if (row.key === 'speed') requireValid([0.6, 0.8, 1, 1.2, 1.5].includes(row.value));
       if (row.key === 'lastTab') requireValid(['articles', 'sentences', 'words'].includes(row.value));
+      if (row.key === 'autoGenerateAudio' || row.key === 'showTranslations') requireValid(typeof row.value === 'boolean');
       if (row.key === 'favView') {
         fields(row.value, ['sentences', 'words']);
         requireValid(['full', 'compact'].includes(row.value.sentences) && ['full', 'compact'].includes(row.value.words));
@@ -151,7 +152,8 @@ export async function importBackup(input) {
       if (builtinKeys.length) await db.settings.put({ key: 'builtinArticles', value: builtinKeys });
       const now = Date.now();
       if (backup.data.sentences.length) await db.audios.bulkAdd(backup.data.sentences.map(sentence => ({
-        key: `s:${sentence.articleId}:${sentence.idx}`, articleId: sentence.articleId, status: 'pending', updatedAt: now,
+        // 备份不含音频；导入后由用户在每篇文章里手动生成，避免一次性批量请求语音接口。
+        key: `s:${sentence.articleId}:${sentence.idx}`, articleId: sentence.articleId, status: 'none', updatedAt: now,
       })));
       // clear() preserves IndexedDB's generator. Also reserve IDs belonging to imported orphaned favorites.
       const referencedIds = [...backup.data.articles.map(row => row.id), ...backup.data.savedSentences.map(row => row.articleId),

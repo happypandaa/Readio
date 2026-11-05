@@ -70,7 +70,7 @@ export default function ArticleDialog({ articleId, onClose }) {
           </form> : <><h2 className="ad-heading">{article.title}</h2><button className="ic" onClick={() => { setTitle(article.title); setEditing(true); }} aria-label="修改标题" title="修改标题"><Icon name="edit" /></button></>}</div>
           <button className="ic" onClick={onClose} disabled={saving} aria-label="关闭"><Icon name="close" /></button>
         </div>
-        <div className="ad-meta"><ArticleStatus article={article} audios={audios} /></div>
+        <div className="ad-meta"><ArticleStatus article={article} audios={audios} sentences={data.sentences} /></div>
         <div className="ad-body">
           <div className="ad-text">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph.map((sentence, at) => <span key={sentence.idx}>
             {at > 0 ? ' ' : ''}{tokenize(sentence.text).map((token, part) => token.type === 'word' && saved.has(`${sentence.idx}|${token.value.toLowerCase()}`)

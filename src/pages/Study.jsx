@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import db, { setLastIndex, setSetting, toggleSavedSentence, touchArticle } from '../db.js';
-import { translateSentence } from '../api.js';
+import { translateArticle, translateSentence } from '../api.js';
 import { getArticleAudioState } from '../audioState.js';
 import usePlayer from '../usePlayer.js';
 import { errorMessage, useToast } from '../toast.jsx';
@@ -10,7 +10,8 @@ import SentenceToolbar from '../components/SentenceToolbar.jsx';
 import PlayerBar from '../components/PlayerBar.jsx';
 import WordCard from '../components/WordCard.jsx';
 import Icon from '../components/Icon.jsx';
-import AudioGenerationStatus from '../components/AudioGenerationStatus.jsx';
+import AudioGenerationStatus, { audioDurationLabel, useGenerateAudio } from '../components/AudioGenerationStatus.jsx';
+import TranslationBar from '../components/TranslationBar.jsx';
 
 export default function Study({ articleId, focus = null }) {
   const [entry, setEntry] = useState(null);
@@ -49,11 +50,19 @@ function StudyContent({ entry }) {
   }, [articleId], null);
   const savedSpeed = useLiveQuery(() => db.settings.get('speed'), [], null);
   const speed = savedSpeed?.value || 1;
-  const { ready } = getArticleAudioState(data?.audios || [], entry.sentenceCount);
+  const showSetting = useLiveQuery(() => db.settings.get('showTranslations'), [], null);
+  const showAll = showSetting?.value === true;
+  const audioState = getArticleAudioState(data?.audios || [], entry.sentenceCount);
+  const { ready } = audioState;
+  const generator = useGenerateAudio(articleId);
   const player = usePlayer({ articleId, count: entry.sentenceCount, initialIndex: entry.initialIndex, speed, ready });
   const textRef = useRef(null);
+  // expanded：单独展开的句子；collapsed：「译文」开关打开时单独收起的句子。
   const [expanded, setExpanded] = useState(new Set());
+  const [collapsed, setCollapsed] = useState(new Set());
   const [translationStatus, setTranslationStatus] = useState({});
+  const [batch, setBatch] = useState({ running: false, failed: 0 });
+  const batchController = useRef(null);
   const [selection, setSelection] = useState(null);
   const [active, setActive] = useState(null);
   const [flash, setFlash] = useState(entry.focus == null ? null : entry.initialIndex);
@@ -151,15 +160,40 @@ function StudyContent({ entry }) {
       toast(errorMessage(error));
     }
   };
+  const visible = new Set(expanded);
+  if (showAll) for (const sentence of data?.sentences || []) if (sentence.zh && !collapsed.has(sentence.idx)) visible.add(sentence.idx);
   const toggleTranslation = index => {
-    const wasOpen = expanded.has(index);
-    setExpanded(previous => {
+    const wasOpen = visible.has(index);
+    const edit = (setter, add) => setter(previous => {
       const next = new Set(previous);
-      wasOpen ? next.delete(index) : next.add(index);
+      add ? next.add(index) : next.delete(index);
       return next;
     });
+    edit(setExpanded, !wasOpen);
+    edit(setCollapsed, wasOpen && showAll);
     if (!wasOpen) void requestTranslation(index);
   };
+  const toggleShowAll = () => {
+    setExpanded(new Set());
+    setCollapsed(new Set());
+    setSetting('showTranslations', !showAll).catch(error => toast(errorMessage(error)));
+  };
+  const translateRest = async () => {
+    if (batch.running) return;
+    const controller = new AbortController();
+    batchController.current = controller;
+    setBatch({ running: true, failed: 0 });
+    try {
+      const failed = await translateArticle(articleId, { signal: controller.signal });
+      if (batchController.current === controller) setBatch({ running: false, failed });
+    } catch (error) {
+      if (batchController.current !== controller) return;
+      setBatch({ running: false, failed: 0 });
+      if (error.name !== 'AbortError') toast(errorMessage(error));
+    }
+  };
+  const stopTranslating = () => { batchController.current?.abort(); };
+  useEffect(() => () => batchController.current?.abort(), []);
   const toggleSave = async index => {
     if (!data?.article || saving.current.has(index)) return;
     const sentence = data.sentences.find(item => item.idx === index);
@@ -205,23 +239,27 @@ function StudyContent({ entry }) {
       <div className="wrap bar">
         <button className="back" id="backBtn" aria-label="返回文章列表" onClick={() => { location.hash = '#/'; }}><Icon name="back" /><span>返回</span></button>
         <div className="s-title" id="studyTitle">{data.article.title}</div>
-        <div className="s-audio num" id="studyAudio" />
+        <div className="s-tools"><button className={`tr-toggle${showAll ? ' on' : ''}`} aria-pressed={showAll}
+          title={showAll ? '隐藏译文' : '显示已有译文'} onClick={toggleShowAll}>译文</button></div>
       </div>
     </header>
     <article className="wrap doc">
-      <AudioGenerationStatus article={data.article} audios={data.audios} />
+      <AudioGenerationStatus article={data.article} audios={data.audios} sentences={data.sentences} />
+      {showAll && <TranslationBar sentences={data.sentences} running={batch.running} failed={batch.failed}
+        onTranslate={translateRest} onStop={stopTranslating} />}
       <h1 className="doc-title" id="docTitle" lang="en">{data.article.title}</h1>
       <ArticleText sentences={data.sentences} current={player.cur} active={active} flash={flash}
-        savedSentences={data.savedSentences} savedWords={data.savedWords} expanded={expanded} translationStatus={translationStatus}
+        savedSentences={data.savedSentences} savedWords={data.savedWords} expanded={visible} translationStatus={translationStatus}
         selection={selection} onWord={openWord} onActivate={activateSentence}
         onRetry={requestTranslation} textRef={textRef} />
-      <SentenceToolbar index={toolbarIndex} textRef={textRef} layoutKey={`${[...expanded].join(',')}|${data.savedSentences.length}|${data.savedWords.length}|${data.sentences.map(item => Boolean(item.zh)).join('')}`}
-        saved={data.savedSentences.some(item => item.idx === toolbarIndex)} expanded={expanded.has(toolbarIndex)} audioReady={ready}
+      <SentenceToolbar index={toolbarIndex} textRef={textRef} layoutKey={`${[...visible].join(',')}|${data.savedSentences.length}|${data.savedWords.length}|${data.sentences.map(item => Boolean(item.zh)).join('')}`}
+        saved={data.savedSentences.some(item => item.idx === toolbarIndex)} expanded={visible.has(toolbarIndex)} audioReady={ready}
         onPlay={playAt} onTranslate={toggleTranslation} onSave={toggleSave} />
     </article>
     {!follow && <button className="follow" id="followBtn" onClick={() => { enableFollow(); scrollCurrent(true, true); }}>回到当前句</button>}
     <PlayerBar current={player.cur} count={entry.sentenceCount} playing={player.playing} waiting={player.waiting}
-      audios={data.audios} speed={speed} ready={ready} onToggle={player.toggle} onStep={step} onSeek={seek}
+      audios={data.audios} speed={speed} ready={ready} audioState={audioState} duration={audioDurationLabel(data.sentences)}
+      generating={generator.busy} onGenerate={() => void generator.run()} onToggle={player.toggle} onStep={step} onSeek={seek}
       onSpeed={value => setSetting('speed', value).catch(error => toast(errorMessage(error)))} />
     {selection && selectedSentence && <WordCard key={`${selection.idx}|${selection.word.toLowerCase()}`} article={data.article} sentence={selectedSentence}
       selection={selection} audioReady={ready} saved={data.savedWords.some(item => item.idx === selection.idx && item.word.toLowerCase() === selection.word.toLowerCase())} onClose={closeWord} />}

@@ -30,6 +30,23 @@ export function tokenize(sentence) {
   return tokens;
 }
 
+// 1.0 倍速下英文朗读约每分钟 150 词，另加句间停顿约 0.3 秒。
+const WORDS_PER_MINUTE = 150;
+const SENTENCE_GAP_SECONDS = 0.3;
+
+export function estimateAudioSeconds(texts = []) {
+  let words = 0;
+  for (const text of texts) words += String(text ?? '').match(wordPattern)?.length || 0;
+  if (!words) return 0;
+  return Math.round(words / WORDS_PER_MINUTE * 60 + texts.length * SENTENCE_GAP_SECONDS);
+}
+
+export function formatAudioDuration(seconds) {
+  if (!seconds) return '';
+  if (seconds < 60) return '不到 1 分钟';
+  return `约 ${Math.round(seconds / 60)} 分钟`;
+}
+
 export function autoTitle(firstSentence) {
   const text = String(firstSentence ?? '').trim().replace(/[\p{P}\s]+$/u, '');
   const words = text.split(/\s+/).filter(Boolean);

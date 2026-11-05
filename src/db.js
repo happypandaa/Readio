@@ -11,6 +11,15 @@ db.version(1).stores({
   savedWords: '++id, createdAt, [articleId+idx]',
   settings: 'key',
 });
+// v2：音频改为手动生成。从未开始生成过的文章（所有句子都还在排队、没有任何结果）改为"未生成"；
+// 已经生成了一部分的文章保持原样，打开应用后继续生成。
+db.version(2).stores({}).upgrade(async tx => {
+  const audios = tx.table('audios');
+  const started = new Set();
+  await audios.each(row => { if (row.articleId != null && row.status !== 'pending') started.add(row.articleId); });
+  await audios.filter(row => row.status === 'pending' && row.articleId != null && !started.has(row.articleId))
+    .modify({ status: 'none' });
+});
 export default db;
 
 // Every async service captures this value, so replacing a backup cannot revive old data.
@@ -33,21 +42,24 @@ function prepareArticle(title, text) {
   return { title: articleTitle, parts };
 }
 
-async function insertArticle({ title, parts }) {
+async function insertArticle({ title, parts }, audioStatus = 'none') {
   const now = Date.now();
   const id = await db.articles.add({ title, sentenceCount: parts.length, createdAt: now,
     lastStudiedAt: null, sortAt: now, lastIndex: 0, finished: false });
   await db.sentences.bulkAdd(parts.map((part, idx) => ({ ...part, articleId: id, idx, zh: null })));
   await db.audios.bulkAdd(parts.map((_part, idx) => ({ key: `s:${id}:${idx}`, articleId: id,
-    status: 'pending', updatedAt: now })));
+    status: audioStatus, updatedAt: now })));
   return id;
 }
 
-export async function addArticle(title, text) {
+export async function addArticle(title, text, { generateAudio = true } = {}) {
   const prepared = prepareArticle(title, text);
-  const id = await db.transaction('rw', db.articles, db.sentences, db.audios, () => insertArticle(prepared));
-  const { enqueueArticle } = await import('./audioQueue.js');
-  void enqueueArticle(id).catch(() => {});
+  const id = await db.transaction('rw', db.articles, db.sentences, db.audios,
+    () => insertArticle(prepared, generateAudio ? 'pending' : 'none'));
+  if (generateAudio) {
+    const { enqueueArticle } = await import('./audioQueue.js');
+    void enqueueArticle(id).catch(() => {});
+  }
   return id;
 }
 

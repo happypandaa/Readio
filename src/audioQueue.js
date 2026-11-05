@@ -165,11 +165,13 @@ export async function enqueueArticle(articleId) {
   pump();
 }
 
-export async function retryFailed(articleId) {
+// 生成整篇音频：未生成、失败、已停止的句子都会重新排队，已完成的句子保留。
+export async function generateArticle(articleId) {
   const epoch = getDataEpoch();
   await db.transaction('rw', db.audios, async () => {
     if (epoch !== getDataEpoch()) return;
-    await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'fail' || row.status === 'stopped'
+    await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'none'
+      || row.status === 'fail' || row.status === 'stopped'
       || (row.status === 'ok' && (!(row.blob instanceof Blob) || !row.blob.size || !/^audio\//i.test(row.blob.type))))
       .modify({ status: 'pending', updatedAt: Date.now(), error: null, errorCode: null });
   });
@@ -180,6 +182,7 @@ export async function retryFailed(articleId) {
     await enqueueArticle(articleId);
   }
 }
+export const retryFailed = generateArticle;
 
 export async function stopArticle(articleId) {
   const epoch = getDataEpoch();
@@ -208,6 +211,7 @@ export async function ensureAudio(key, text) {
     if (!article) throw new Error('原文已删除');
     const state = getArticleAudioState(audios, article.sentenceCount);
     if (!state.ready) throw new Error(state.error || (state.stopped ? '音频生成已停止，请继续生成后播放'
+      : state.idle && !state.pending && !state.failed ? '还没有生成音频，请先生成音频'
       : state.failed ? '音频生成失败，请重试完成后播放' : '整篇音频生成完成后才能播放'));
     return old.blob;
   }

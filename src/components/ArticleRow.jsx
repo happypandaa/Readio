@@ -3,9 +3,9 @@ import db from '../db.js';
 import { getArticleAudioState } from '../audioState.js';
 import AudioGenerationStatus from './AudioGenerationStatus.jsx';
 
-export function ArticleStatus({ article, audios = [] }) {
+export function ArticleStatus({ article, audios = [], sentences }) {
   const count = article.sentenceCount;
-  if (!getArticleAudioState(audios, count).ready) return <AudioGenerationStatus article={article} audios={audios} />;
+  if (!getArticleAudioState(audios, count).ready) return <AudioGenerationStatus article={article} audios={audios} sentences={sentences} />;
   const status = article.finished ? `已学完 · 共 ${count} 句` : article.lastStudiedAt != null
     ? `上次学到第 ${article.lastIndex + 1} 句 · 共 ${count} 句` : `未开始 · 共 ${count} 句`;
   return <p className="row-meta num">{status}</p>;
@@ -26,7 +26,7 @@ export default function ArticleRow({ article, onOpen }) {
     }}>
       <h3 className="row-title">{article.title}</h3>
       <p className="row-prev">{data?.sentences.map(sentence => sentence.text).join(' ')}</p>
-      <ArticleStatus article={article} audios={data?.audios} />
+      <ArticleStatus article={article} audios={data?.audios} sentences={data?.sentences} />
     </div>
   </li>;
 }

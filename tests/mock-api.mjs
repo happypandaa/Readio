@@ -16,6 +16,12 @@ async function upstream(url, options) {
     calls.set(key, (calls.get(key) || 0) + 1);
     await wait(text.includes('Slow') ? 2500 : 350);
     if (text.includes('Fail translation') && calls.get(key) === 1) return Response.json({ error: { message: '测试翻译失败' } }, { status: 503 });
+    if (body.response_format && text.startsWith('[')) {
+      // 批量翻译：按输入顺序返回同样数量的译文；包含 Broken batch 时返回错误格式，触发逐句翻译。
+      const list = JSON.parse(text);
+      if (list.some(item => item.includes('Broken batch'))) return Response.json({ choices: [{ message: { content: '{"translations": []}' } }] });
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: list.map((_, index) => `批量译文 ${index + 1}`) }) } }] });
+    }
     if (body.response_format) {
       const word = text.match(/单词：([^\n]+)/)?.[1] || 'word';
       if (word.toLowerCase() === 'mystery' && calls.get(key) === 1) return Response.json({ error: { message: '测试查词失败' } }, { status: 503 });

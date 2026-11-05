@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { autoTitle, splitSentences, tokenize } from '../src/text.js';
+import { autoTitle, estimateAudioSeconds, formatAudioDuration, splitSentences, tokenize } from '../src/text.js';
 
 test('sentence splitting preserves paragraph boundaries and normalizes pasted whitespace', () => {
   assert.deepEqual(splitSentences('  First sentence.\r\nSecond sentence!\r\n\r\n\tA new\t paragraph?  '), [
@@ -38,4 +38,16 @@ test('automatic titles remove ending punctuation and keep at most eight words', 
   assert.equal(autoTitle('  We all need a little hope today.  '), 'We all need a little hope today');
   assert.equal(autoTitle('One two three four five six seven eight nine ten.'), 'One two three four five six seven eight…');
   assert.equal(autoTitle('She said, “Hello!”'), 'She said, “Hello');
+});
+
+test('audio duration is estimated from word count at normal speed', () => {
+  assert.equal(estimateAudioSeconds([]), 0);
+  assert.equal(estimateAudioSeconds(['...']), 0);
+  const sentence = Array.from({ length: 15 }, () => 'word').join(' ') + '.';
+  // 150 words in 10 sentences: 60 seconds of speech plus 3 seconds of pauses.
+  assert.equal(estimateAudioSeconds(Array(10).fill(sentence)), 63);
+  assert.equal(formatAudioDuration(0), '');
+  assert.equal(formatAudioDuration(40), '不到 1 分钟');
+  assert.equal(formatAudioDuration(63), '约 1 分钟');
+  assert.equal(formatAudioDuration(250), '约 4 分钟');
 });
