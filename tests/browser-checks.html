@@ -18,10 +18,12 @@
 <pre id="details"></pre>
 <script type="module">
 import db, { addArticle, renameArticle, deleteArticle, touchArticle, setLastIndex, setFinished,
-  toggleSavedSentence, toggleSavedWord, removeSaved, restoreSaved, getSetting, setSetting, getDataEpoch } from '/src/db.js';
+  toggleSavedSentence, toggleSavedWord, removeSaved, restoreSaved, getSetting, setSetting, getDataEpoch,
+  ensureBuiltinArticles } from '/src/db.js';
+import { builtinArticles } from '/src/builtinArticles.js';
 import { splitSentences, tokenize } from '/src/text.js';
 import { translateSentence, translateSavedSentence, lookupWord } from '/src/api.js';
-import { start, reset, retryFailed, ensureAudio } from '/src/audioQueue.js';
+import { start, reset, stopArticle, retryFailed, ensureAudio } from '/src/audioQueue.js';
 import { exportBackup, readBackup, validateBackup, importBackup } from '/src/backup.js';
 
 const status = document.querySelector('#status');
@@ -143,6 +145,76 @@ async function run() {
   };
   status.dataset.state = 'running';
   try {
+    await test('两篇内置文章并发初始化仅添加一次，保留正文段落和原有进度，删除不重建', async () => {
+      const existing = await silentArticle('My own article', 'My first sentence. My second sentence.');
+      await touchArticle(existing.id);
+      await setLastIndex(existing.id, 1);
+      const before = await db.articles.get(existing.id);
+      const requests = speechLogs().length;
+      const inserted = (await Promise.all([
+        ensureBuiltinArticles(builtinArticles), ensureBuiltinArticles(builtinArticles),
+      ])).flat();
+      equal(inserted.length, 2, '并发初始化总共只新增两篇');
+      equal(new Set(inserted).size, 2);
+      equal(await db.articles.count(), 3);
+      equal(await db.articles.get(existing.id), before, '已有文章、排序和学习进度均不改变');
+      equal(builtinArticles.map(article => article.title), [
+        'How language shapes the way we think', "Saying 'No' at Work Can Be Good for Your Health",
+      ]);
+      const firstSentences = ["So I'll be speaking to you using language because I can.",
+        'From VOA Learning English, this is the Health and Lifestyle Report.'];
+      for (const [index, source] of builtinArticles.entries()) {
+        const article = await db.articles.filter(row => row.title === source.title).first();
+        assert(article && article.id !== existing.id);
+        const sentences = await byArticle(article.id);
+        equal(sentences[0].text, firstSentences[index], '正文首句不能包含标题');
+        equal(sentences.map(row => row.text).join(' '), source.text.replace(/\s+/g, ' ').trim(), '正文完整保留');
+        equal(sentences.filter(row => row.paraStart).length,
+          source.text.split(/\n\s*\n/).filter(paragraph => paragraph.trim()).length - 1, '空行段落完整保留');
+        equal(article.sentenceCount, sentences.length);
+        assert(sentences.length > 1 && sentences.length <= 300);
+        const audios = await db.audios.where('articleId').equals(article.id).toArray();
+        equal(audios.length, sentences.length, '每句创建一个音频记录');
+        assert(audios.every(row => row.status === 'pending' && !row.blob), '初始化仅入库，不发起生成');
+      }
+      equal(speechLogs().length, requests, '内置文章初始化不得隐式调用语音接口');
+      equal(await getSetting('builtinArticles', []), builtinArticles.map(article => article.key));
+      await deleteArticle(inserted[0]);
+      equal(await ensureBuiltinArticles(builtinArticles), [], '用户删除的内置文章不能重新出现');
+      assert(!(await db.articles.get(inserted[0])));
+      equal(await db.articles.count(), 2);
+    });
+
+    await test('内置文章标记可导出导入，合并本地标记且旧备份不会恢复已删除文章', async () => {
+      const ids = await ensureBuiltinArticles(builtinArticles);
+      for (const id of ids) await deleteArticle(id);
+      const click = HTMLAnchorElement.prototype.click;
+      let exported;
+      try {
+        HTMLAnchorElement.prototype.click = function () {};
+        exported = await exportBackup();
+      } finally { HTMLAnchorElement.prototype.click = click; }
+      equal(exported.data.articles, []);
+      equal(exported.data.settings.find(row => row.key === 'builtinArticles')?.value,
+        builtinArticles.map(article => article.key), '删除文章仍应导出安装标记');
+      equal(validateBackup(exported), exported);
+      equal(await readBackup(new Blob([JSON.stringify(exported)])), exported);
+      await clearSandbox();
+      await setSetting('builtinArticles', ['another-local-article']);
+      await importBackup(exported);
+      const expectedKeys = ['another-local-article', ...builtinArticles.map(article => article.key)].sort();
+      equal((await getSetting('builtinArticles', [])).slice().sort(), expectedKeys, '导入标记与本地标记取并集');
+      equal(await ensureBuiltinArticles(builtinArticles), [], '导入后不能恢复已删除文章');
+      const legacy = makeBackup(null, [], { settings: [{ key: 'speed', value: 0.8 }] });
+      equal(validateBackup(legacy), legacy, '无内置标记的旧版备份仍有效');
+      await importBackup(legacy);
+      equal((await getSetting('builtinArticles', [])).slice().sort(), expectedKeys, '旧备份不能清除本地安装标记');
+      equal(await getSetting('speed', 1), 0.8);
+      equal(await ensureBuiltinArticles(builtinArticles), []);
+      equal(await db.articles.count(), 0);
+      equal(speechLogs().length, 0, '仅导入标记不得生成音频');
+    });
+
     await test('数据库事务、分段、标题、学习进度与校验失败不留部分数据', async () => {
       const article = await silentArticle('', 'First sentence. Second sentence.\n\nThird sentence.');
       equal(article.title, 'First sentence');
@@ -195,6 +267,58 @@ async function run() {
       await retryFailed(articleId);
       await audioReady(articleId);
       equal(speechLogs().length, 4);
+    });
+
+    await test('生成中禁止播放，停止会取消请求，刷新不重启，继续仅补齐未完成音频', async () => {
+      const articleId = await addArticle('Stop generation', 'A completed first sentence. Slow second sentence. Slow third sentence.');
+      await until(async () => (await db.audios.get(`s:${articleId}:0`))?.status === 'ok' && speechLogs().length === 3,
+        '首句完成、其余请求正在生成');
+      const completed = await db.audios.get(`s:${articleId}:0`);
+      await rejects(() => ensureAudio(completed.key, 'A completed first sentence.'), '整篇音频');
+      await stopArticle(articleId);
+      await until(() => speechActive === 0, '停止取消所有活动请求');
+      const rows = await db.audios.where('articleId').equals(articleId).toArray();
+      equal(rows.map(row => row.status), ['ok', 'stopped', 'stopped']);
+      const requestCount = speechLogs().length;
+      await start();
+      await sleep(100);
+      equal(speechLogs().length, requestCount, '停止后的start不得自动继续');
+      await rejects(() => ensureAudio(completed.key, 'A completed first sentence.'), '已停止');
+      await retryFailed(articleId);
+      await audioReady(articleId);
+      equal((await db.audios.get(completed.key)).updatedAt, completed.updatedAt, '已生成音频不得重做');
+      equal(speechLogs().length, requestCount + 2, '仅重新生成未完成两句');
+      assert((await ensureAudio(completed.key, 'A completed first sentence.')).size > 0);
+    });
+
+    for (const [text, code] of [['Invalid key audio example.', 'invalid_api_key'], ['No balance audio example.', 'insufficient_balance']]) {
+      await test(`${code}首句失败立即终止整批，不自动重试后续句子`, async () => {
+        const firstId = await addArticle('Fatal batch', `${text} A later sentence. Another later sentence.`);
+        const secondId = await addArticle('Another queued article', 'A different article sentence.');
+        await until(async () => (await db.audios.toArray()).every(row => row.status === 'fail'), '所有待生成音频均终止');
+        equal(speechLogs().length, 1, '失败首句只请求一次，不能放大为整篇请求');
+        const rows = await db.audios.toArray();
+        assert(rows.every(row => row.errorCode === code && row.error), '所有失败应带具体错误码和文案');
+        await start();
+        equal(speechLogs().length, 1, '重新start不得绕过终止状态');
+        await retryFailed(secondId);
+        await audioReady(secondId);
+        equal(speechLogs().length, 2, '修复配置后可单独重试其他文章');
+        assert((await db.audios.where('articleId').equals(firstId).toArray()).every(row => row.status === 'fail'));
+      });
+    }
+
+    await test('并发中发现Key错误会取消其余请求，并保留已完成音频', async () => {
+      const articleId = await addArticle('Concurrent fatal batch',
+        'A successful first sentence. Invalid key audio example. Slow third sentence. Slow fourth sentence. A queued last sentence.');
+      await until(async () => (await db.audios.where('articleId').equals(articleId).toArray()).every(row => row.status !== 'pending'),
+        '并发中的整批错误终止');
+      await until(() => speechActive === 0, '取消其余并发请求');
+      const rows = await db.audios.where('articleId').equals(articleId).toArray();
+      equal(rows.map(row => row.status), ['ok', 'fail', 'fail', 'fail', 'fail']);
+      equal(speechLogs().length, 4, '最后一句不得发出，失败句不得自动重试');
+      equal(speechLogs().filter(log => log.error === 'AbortError').length, 2, '两个正在生成的请求均取消');
+      assert(rows[0].blob.size > 0, '已完成的首句应保留');
     });
 
     await test('刷新式start恢复pending，重复start不重复入队', async () => {

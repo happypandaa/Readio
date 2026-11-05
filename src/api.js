@@ -1,4 +1,5 @@
 import db, { getDataEpoch } from './db.js';
+import { isFatalServiceError, responseError, serviceError } from './serviceError.js';
 
 const translations = new Map();
 const lookups = new Map();
@@ -9,16 +10,19 @@ meaning 要求：先给最常见的义项，再用"（这里指）……"说明�
 
 async function post(path, body, signal) {
   let response;
+  const timeout = AbortSignal.timeout(90000);
   try {
     response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: signal ?? AbortSignal.timeout(90000) });
+      body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('已停止生成', 'AbortError');
+    if (timeout.aborted) throw serviceError('生成失败：网络请求超时，请检查网络后重试', { code: 'timeout', retryable: true });
     if (error.name === 'AbortError') throw error;
-    throw new Error('连接不上服务，请确认本地服务已启动');
+    throw serviceError('连接不上服务，请确认本地服务已启动', { code: 'network_error', retryable: true });
   }
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(`生成失败：${data?.error?.message || '服务暂时不可用'}`);
+    throw responseError(response.status, data);
   }
   return response;
 }
@@ -139,10 +143,17 @@ export async function resumeTranslations() {
   if (epoch !== getDataEpoch()) return;
   // Bound startup requests; saved translations are independent from the audio queue.
   let next = 0;
+  let fatalError = null;
   await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
-    while (next < pending.length && epoch === getDataEpoch()) {
+    while (!fatalError && next < pending.length && epoch === getDataEpoch()) {
       const item = pending[next++];
-      await translateSavedSentence(item).catch(() => {});
+      await translateSavedSentence(item).catch(error => { if (isFatalServiceError(error)) fatalError = error; });
     }
   }));
+  if (fatalError && epoch === getDataEpoch()) {
+    await db.transaction('rw', db.savedSentences, async () => {
+      if (epoch === getDataEpoch()) await db.savedSentences.filter(item => item.zhStatus === 'pending').modify({ zhStatus: 'fail' });
+    });
+    throw fatalError;
+  }
 }

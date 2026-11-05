@@ -94,7 +94,7 @@ export function validateBackup(input) {
     const settingKeys = new Set();
     for (const row of settings) {
       fields(row, ['key', 'value']);
-      requireValid(['speed', 'lastTab', 'favView'].includes(row.key));
+      requireValid(['speed', 'lastTab', 'favView', 'builtinArticles'].includes(row.key));
       unique(settingKeys, row.key);
       if (row.key === 'speed') requireValid([0.6, 0.8, 1, 1.2, 1.5].includes(row.value));
       if (row.key === 'lastTab') requireValid(['articles', 'sentences', 'words'].includes(row.value));
@@ -102,6 +102,9 @@ export function validateBackup(input) {
         fields(row.value, ['sentences', 'words']);
         requireValid(['full', 'compact'].includes(row.value.sentences) && ['full', 'compact'].includes(row.value.words));
       }
+      if (row.key === 'builtinArticles') requireValid(Array.isArray(row.value) && row.value.length <= 1000
+        && row.value.every(key => typeof key === 'string' && /^[a-z0-9][a-z0-9-]{0,127}$/.test(key))
+        && new Set(row.value).size === row.value.length);
     }
     // Drop object identity and inherited values before any database write.
     return JSON.parse(serialized);
@@ -140,8 +143,12 @@ export async function importBackup(input) {
   reset();
   try {
     await db.transaction('rw', db.tables, async () => {
+      const installed = (await db.settings.get('builtinArticles'))?.value || [];
       for (const table of db.tables) await table.clear();
       for (const name of TABLES) if (backup.data[name].length) await db.table(name).bulkAdd(backup.data[name]);
+      const imported = (await db.settings.get('builtinArticles'))?.value || [];
+      const builtinKeys = [...new Set([...installed, ...imported])];
+      if (builtinKeys.length) await db.settings.put({ key: 'builtinArticles', value: builtinKeys });
       const now = Date.now();
       if (backup.data.sentences.length) await db.audios.bulkAdd(backup.data.sentences.map(sentence => ({
         key: `s:${sentence.articleId}:${sentence.idx}`, articleId: sentence.articleId, status: 'pending', updatedAt: now,

@@ -2,8 +2,8 @@ import { Fragment, useMemo } from 'react';
 import { tokenize } from '../text.js';
 import Icon from './Icon.jsx';
 
-export default function ArticleText({ sentences, current, hover, flash, savedSentences, savedWords,
-  expanded, translationStatus, selection, onWord, onSentenceEnter, onSentenceLeave, onRetry, textRef }) {
+export default function ArticleText({ sentences, current, active, flash, savedSentences, savedWords,
+  expanded, translationStatus, selection, onWord, onActivate, onRetry, textRef }) {
   const paragraphs = useMemo(() => {
     const result = [];
     for (const sentence of sentences) {
@@ -19,16 +19,28 @@ export default function ArticleText({ sentences, current, hover, flash, savedSen
     {paragraphs.map((paragraph, paragraphIndex) => <p className="para" lang="en" key={paragraphIndex}>
       {paragraph.map((sentence, sentenceIndex) => <Fragment key={sentence.idx}>
         {sentenceIndex > 0 ? ' ' : null}
-        <span className={['sx', current === sentence.idx && 'cur', hover === sentence.idx && 'hov', flash === sentence.idx && 'flash'].filter(Boolean).join(' ')}
-          data-i={sentence.idx} onMouseEnter={() => onSentenceEnter(sentence.idx)}
-          onMouseLeave={event => onSentenceLeave(event.relatedTarget)}>
+        <span className={['sx', current === sentence.idx && 'cur', active === sentence.idx && 'active', flash === sentence.idx && 'flash'].filter(Boolean).join(' ')}
+          data-i={sentence.idx} role={active === sentence.idx ? 'group' : 'button'} tabIndex={0}
+          aria-label={`第 ${sentence.idx + 1} 句${active === sentence.idx ? '，已激活，可选择单词查词' : '，点击或按回车激活'}`}
+          onClick={() => onActivate(sentence.idx)} onKeyDown={event => {
+            if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+            event.preventDefault();
+            onActivate(sentence.idx);
+          }}>
           {tokenize(sentence.text).map((token, tokenIndex) => token.type === 'word'
-            ? <span role="button" tabIndex={0} className={['w', wordSet.has(`${sentence.idx}|${token.value.toLowerCase()}`) && 'saved',
+            ? <span role={active === sentence.idx ? 'button' : undefined} tabIndex={active === sentence.idx ? 0 : undefined} className={['w', wordSet.has(`${sentence.idx}|${token.value.toLowerCase()}`) && 'saved',
               selection?.idx === sentence.idx && selection.tokenIndex === tokenIndex && 'sel'].filter(Boolean).join(' ')}
-              data-w={token.value} key={tokenIndex} aria-label={`查词 ${token.value}`}
-              onClick={event => onWord({ word: token.value, idx: sentence.idx, tokenIndex, element: event.currentTarget })}
+              data-w={token.value} key={tokenIndex} aria-label={active === sentence.idx ? `查词 ${token.value}` : undefined}
+              onClick={event => {
+                if (active !== sentence.idx) return;
+                event.stopPropagation();
+                onWord({ word: token.value, idx: sentence.idx, tokenIndex, element: event.currentTarget });
+              }}
               onKeyDown={event => {
-                if (event.key === 'Enter') { event.preventDefault(); onWord({ word: token.value, idx: sentence.idx, tokenIndex, element: event.currentTarget }); }
+                if (active !== sentence.idx || !['Enter', ' '].includes(event.key)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onWord({ word: token.value, idx: sentence.idx, tokenIndex, element: event.currentTarget });
               }}>{token.value}</span>
             : <Fragment key={tokenIndex}>{token.value}</Fragment>)}
           {sentenceSet.has(sentence.idx) && <span className="mini-star" aria-label="已收藏"><Icon name="starOn" /></span>}

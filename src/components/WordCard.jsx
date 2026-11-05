@@ -5,7 +5,7 @@ import { errorMessage, useToast } from '../toast.jsx';
 import { usePreviewAudio } from '../usePreviewAudio.js';
 import Icon from './Icon.jsx';
 
-export default function WordCard({ article, sentence, selection, saved, onClose }) {
+export default function WordCard({ article, sentence, selection, saved, audioReady = true, onClose }) {
   const toast = useToast();
   const { playingKey, play, stop } = usePreviewAudio();
   const [requestId, setRequestId] = useState(0);
@@ -22,7 +22,7 @@ export default function WordCard({ article, sentence, selection, saved, onClose 
     setState({ loading: true, result: null, failed: false });
     lookupWord(selection.word, sentence.text).then(result => {
       if (alive) setState({ loading: false, result, failed: false });
-    }).catch(() => { if (alive) setState({ loading: false, result: null, failed: true }); });
+    }).catch(error => { if (alive) setState({ loading: false, result: null, failed: true, error: error.message }); });
     return () => { alive = false; };
   }, [selection.word, sentence.text, requestId]);
   useEffect(() => {
@@ -83,10 +83,10 @@ export default function WordCard({ article, sentence, selection, saved, onClose 
   };
   return <div className="wcard" role="dialog" aria-label="查词" ref={cardRef} style={position}>
     <div className="wc-head"><span className="wc-word" lang="en">{selection.word}</span>
-      {state.result && <button className={`ic${playingKey === key ? ' speaking' : ''}`} aria-label="发音" onClick={() => play(key, selection.word)}><Icon name="speaker" /></button>}
+      {state.result && <button className={`ic${playingKey === key ? ' speaking' : ''}`} disabled={!audioReady} aria-label="发音" title={audioReady ? '发音' : '全部音频生成完成后可播放'} onClick={() => play(key, selection.word)}><Icon name="speaker" /></button>}
     </div>
     {state.loading ? <div aria-label="查询中" role="status"><div className="sk" style={{ width: '40%' }} /><div className="sk" style={{ width: '90%' }} /><div className="sk" style={{ width: '70%' }} /></div>
-      : state.failed ? <p className="wc-def" style={{ color: 'var(--ink-3)' }}>查询失败 <button className="link" onClick={() => setRequestId(value => value + 1)}>重试</button></p>
+      : state.failed ? <p className="wc-def" style={{ color: 'var(--ink-3)' }}>{state.error || '查询失败'} <button className="link" onClick={() => setRequestId(value => value + 1)}>重试</button></p>
         : <>
           <div className="wc-meta"><span>{state.result.phonetic}</span>{state.result.lemma && state.result.lemma.toLowerCase() !== selection.word.toLowerCase() && <span>原形 {state.result.lemma}</span>}</div>
           <div className="wc-def"><span className="pos">{state.result.pos}</span>{state.result.meaning}</div>

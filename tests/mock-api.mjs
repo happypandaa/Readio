@@ -28,6 +28,8 @@ async function upstream(url, options) {
   const key = `audio:${text}`;
   calls.set(key, (calls.get(key) || 0) + 1);
   await wait(text.includes('Slow') ? 2500 : 250);
+  if (text.includes('Invalid key audio')) return Response.json({ error: { message: 'Invalid API key' } }, { status: 401 });
+  if (text.includes('No balance audio')) return Response.json({ message: 'insufficient balance' }, { status: 402 });
   if (text.includes('Fail audio') && calls.get(key) <= 3) return Response.json({ code: 45000000, message: '测试音频失败' });
   return new Response(JSON.stringify({ code: 0, data: audio.toString('base64') }) + '\n' + JSON.stringify({ code: 20000000 }), { headers: { 'Content-Type': 'application/json' } });
 }

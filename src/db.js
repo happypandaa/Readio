@@ -23,25 +23,49 @@ function savedTable(name) {
   return db.table(name);
 }
 
-export async function addArticle(title, text) {
+function prepareArticle(title, text) {
   if (typeof text !== 'string' || !/[A-Za-z]/.test(text)) throw new Error('没有识别到英文内容');
   const parts = splitSentences(text);
   if (!parts.length) throw new Error('请填写文章正文');
   if (parts.length > 300) throw new Error(`文章太长了，最多支持 300 句，当前约 ${parts.length} 句`);
   const articleTitle = String(title ?? '').trim() || autoTitle(parts[0].text);
   if (String(title ?? '').trim().length > 80) throw new Error('标题最多 80 个字符');
+  return { title: articleTitle, parts };
+}
+
+async function insertArticle({ title, parts }) {
   const now = Date.now();
-  const id = await db.transaction('rw', db.articles, db.sentences, db.audios, async () => {
-    const id = await db.articles.add({ title: articleTitle, sentenceCount: parts.length, createdAt: now,
-      lastStudiedAt: null, sortAt: now, lastIndex: 0, finished: false });
-    await db.sentences.bulkAdd(parts.map((part, idx) => ({ ...part, articleId: id, idx, zh: null })));
-    await db.audios.bulkAdd(parts.map((_part, idx) => ({ key: `s:${id}:${idx}`, articleId: id,
-      status: 'pending', updatedAt: now })));
-    return id;
-  });
+  const id = await db.articles.add({ title, sentenceCount: parts.length, createdAt: now,
+    lastStudiedAt: null, sortAt: now, lastIndex: 0, finished: false });
+  await db.sentences.bulkAdd(parts.map((part, idx) => ({ ...part, articleId: id, idx, zh: null })));
+  await db.audios.bulkAdd(parts.map((_part, idx) => ({ key: `s:${id}:${idx}`, articleId: id,
+    status: 'pending', updatedAt: now })));
+  return id;
+}
+
+export async function addArticle(title, text) {
+  const prepared = prepareArticle(title, text);
+  const id = await db.transaction('rw', db.articles, db.sentences, db.audios, () => insertArticle(prepared));
   const { enqueueArticle } = await import('./audioQueue.js');
   void enqueueArticle(id).catch(() => {});
   return id;
+}
+
+export async function ensureBuiltinArticles(articles) {
+  const epoch = getDataEpoch();
+  const prepared = articles.map(article => ({ key: article.key, ...prepareArticle(article.title, article.text) }));
+  return db.transaction('rw', db.articles, db.sentences, db.audios, db.settings, async () => {
+    if (epoch !== getDataEpoch()) return [];
+    const installed = new Set((await db.settings.get('builtinArticles'))?.value || []);
+    const ids = [];
+    for (const article of prepared) {
+      if (installed.has(article.key)) continue;
+      ids.push(await insertArticle(article));
+      installed.add(article.key);
+    }
+    if (ids.length) await db.settings.put({ key: 'builtinArticles', value: [...installed] });
+    return ids;
+  });
 }
 
 export async function renameArticle(id, title) {
@@ -51,6 +75,8 @@ export async function renameArticle(id, title) {
 }
 
 export async function deleteArticle(id) {
+  const { stopArticle } = await import('./audioQueue.js');
+  await stopArticle(id);
   await db.transaction('rw', db.articles, db.sentences, db.audios, async () => {
     await db.articles.delete(id);
     await db.sentences.where('articleId').equals(id).delete();

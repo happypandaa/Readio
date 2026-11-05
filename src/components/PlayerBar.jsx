@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Icon from './Icon.jsx';
 import Menu from './Menu.jsx';
 
-export default function PlayerBar({ current, count, playing, waiting, audios, speed, onToggle, onStep, onSeek, onSpeed }) {
+export default function PlayerBar({ current, count, playing, waiting, audios, ready = false, speed, onToggle, onStep, onSeek, onSpeed }) {
   const [anchor, setAnchor] = useState(null);
   const statuses = new Map(audios.map(item => [Number(item.key.split(':').at(-1)), item.status]));
   return <footer className="player" id="player">
@@ -13,10 +13,10 @@ export default function PlayerBar({ current, count, playing, waiting, audios, sp
           title={`第 ${index + 1} 句`} aria-label={`跳到第 ${index + 1} 句`} aria-pressed={current === index} onClick={() => onSeek(index)}><i /></button>)}
       </div>
       <div className="p-row">
-        <div className="p-pos num" id="pPos">{current + 1} / {count}{waiting && <small role="status">等待音频…</small>}</div>
+        <div className="p-pos num" id="pPos">{current + 1} / {count}{!ready ? <small role="status">生成完成后可播放</small> : waiting && <small role="status">加载音频…</small>}</div>
         <div className="p-ctrl">
           <button className="ic" id="prevBtn" aria-label="上一句" disabled={current === 0} onClick={() => onStep(-1)}><Icon name="prev" /></button>
-          <button className="p-play" id="playBtn" aria-label={playing ? '暂停' : '播放'} onClick={onToggle}><Icon name={playing ? 'pause' : 'play'} /></button>
+          <button className="p-play" id="playBtn" disabled={!ready} title={!ready ? '文章音频全部生成后可播放' : playing ? '暂停' : '播放'} aria-label={playing ? '暂停' : '播放'} onClick={onToggle}><Icon name={playing ? 'pause' : 'play'} /></button>
           <button className="ic" id="nextBtn" aria-label="下一句" disabled={current >= count - 1} onClick={() => onStep(1)}><Icon name="next" /></button>
         </div>
         <div className="p-speed"><button className="speed-btn num" id="speedBtn" aria-label={`语速 ${Number(speed).toFixed(1)} 倍`} aria-haspopup="menu" aria-expanded={Boolean(anchor)} onClick={event => setAnchor(event.currentTarget)}>{Number(speed).toFixed(1)}×</button></div>

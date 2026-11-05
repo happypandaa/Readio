@@ -18,8 +18,8 @@ import Empty from '../components/Empty.jsx';
 const tabs = [['articles', '文章'], ['sentences', '句子'], ['words', '生词']];
 const empty = {
   articles: ['还没有文章', '粘贴一段英文，就可以开始逐句听读。'],
-  sentences: ['还没有收藏的句子', '在学习页把鼠标移到句子上，点星标即可收藏。'],
-  words: ['还没有收藏的生词', '在学习页点击任意单词，即可查看释义并收藏。'],
+  sentences: ['还没有收藏的句子', '在学习页点击激活句子，再点星标即可收藏。'],
+  words: ['还没有收藏的生词', '在学习页先点击激活句子，再点击其中的单词查看释义并收藏。'],
 };
 
 export default function ArticleList() {

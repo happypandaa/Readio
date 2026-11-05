@@ -33,6 +33,11 @@
 .row-meta { font-size: 13px; color: var(--ink-3); display: flex; align-items: center; gap: 8px; }
 .row-meta.gen { color: var(--dial); }
 .row-meta.fail { color: var(--danger); }
+.audio-generation { min-width: 0; margin: 8px 0; }
+.audio-generation .row-meta { flex-wrap: wrap; }
+.generation-label { display: inline-flex; align-items: center; gap: 8px; }
+.audio-generation progress { display: block; width: 100%; height: 4px; margin-top: 8px; accent-color: var(--dial); }
+.generation-error { color: var(--danger); font-size: 12.5px; line-height: 1.5; margin: 6px 0 0; overflow-wrap: anywhere; }
 .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 .row .more { margin-top: 18px; }

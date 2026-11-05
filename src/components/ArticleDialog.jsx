@@ -8,6 +8,7 @@ import { usePreviewAudio } from '../usePreviewAudio.js';
 import Icon from './Icon.jsx';
 import ConfirmDialog, { useDialog } from './ConfirmDialog.jsx';
 import { ArticleStatus } from './ArticleRow.jsx';
+import { getArticleAudioState } from '../audioState.js';
 
 export default function ArticleDialog({ articleId, onClose }) {
   const [editing, setEditing] = useState(false);
@@ -43,6 +44,7 @@ export default function ArticleDialog({ articleId, onClose }) {
   }, [data?.sentences]);
   if (!data?.article) return null;
   const { article, words, audios } = data;
+  const audioReady = getArticleAudioState(audios, article.sentenceCount).ready;
   const saved = new Set(words.map(word => `${word.idx}|${word.word.toLowerCase()}`));
   async function save(event) {
     event.preventDefault();
@@ -82,7 +84,7 @@ export default function ArticleDialog({ articleId, onClose }) {
                 <div><span className="adw-word">{word.word}</span><span className="phon">{word.phonetic}</span>
                   <p className="def"><span className="pos">{word.pos}</span>{word.meaning}</p></div>
                 <div className="adw-acts">
-                  <button className={`ic${playingKey === key ? ' speaking' : ''}`} onClick={() => play(key, word.word)} aria-label="发音"><Icon name="speaker" /></button>
+                  <button className={`ic${playingKey === key ? ' speaking' : ''}`} disabled={!audioReady} title={audioReady ? '发音' : '文章音频全部生成后可播放'} onClick={() => { if (audioReady) play(key, word.word); }} aria-label="发音"><Icon name="speaker" /></button>
                   <button className="ic" onClick={() => study(word.idx)} aria-label="回到原文" title="回到原文"><Icon name="open" /></button>
                 </div>
               </div>;

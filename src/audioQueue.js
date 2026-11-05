@@ -1,17 +1,22 @@
 import db, { getDataEpoch, invalidatePendingWork } from './db.js';
 import { speech } from './api.js';
+import { isFatalServiceError } from './serviceError.js';
+import { getArticleAudioState } from './audioState.js';
 
 const CONCURRENCY = 3;
 const tasks = new Map();
 const active = new Set();
 let queue = [];
+let speechVerified = false;
+let blockedError = null;
+const stoppedArticles = new Set();
 
 function cancelled() {
   return new DOMException('数据已更新', 'AbortError');
 }
 
 function check(task) {
-  if (task.epoch !== getDataEpoch() || task.controller.signal.aborted) throw cancelled();
+  if (task.epoch !== getDataEpoch() || task.controller.signal.aborted || tasks.get(task.key) !== task) throw cancelled();
 }
 
 function delay(ms, signal) {
@@ -24,12 +29,36 @@ function delay(ms, signal) {
 }
 
 function makeTask(key) {
-  const task = { key, epoch: getDataEpoch(), controller: new AbortController() };
+  const match = /^s:(\d+):\d+$/.exec(key);
+  const task = { key, articleId: match ? Number(match[1]) : null, epoch: getDataEpoch(), controller: new AbortController() };
   task.promise = new Promise((resolve, reject) => { task.resolve = resolve; task.reject = reject; });
   // A queued article often has no player waiting for it yet.
   task.promise.catch(() => {});
   tasks.set(key, task);
   return task;
+}
+
+function cancelTasks(predicate, error = cancelled()) {
+  for (const task of tasks.values()) {
+    if (!predicate(task)) continue;
+    task.controller.abort();
+    task.reject(error);
+    tasks.delete(task.key);
+  }
+  queue = queue.filter(task => tasks.get(task.key) === task);
+}
+
+async function failBatch(error, epoch) {
+  if (epoch !== getDataEpoch()) return;
+  blockedError = error;
+  speechVerified = false;
+  cancelTasks(() => true, error);
+  await db.transaction('rw', db.audios, async () => {
+    if (epoch !== getDataEpoch()) return;
+    await db.audios.where('status').equals('pending').modify({
+      status: 'fail', error: error.message, errorCode: error.code, updatedAt: Date.now(),
+    });
+  });
 }
 
 async function currentSentence(task) {
@@ -64,24 +93,34 @@ async function generate(task) {
       check(task);
       if (caught.name === 'AbortError') throw caught;
       error = caught;
+      if (isFatalServiceError(error)) {
+        await failBatch(error, task.epoch);
+        throw error;
+      }
+      if (error.retryable === false) break;
       if (attempt < 2) await delay(attempt === 0 ? 1000 : 3000, task.controller.signal);
     }
   }
   await db.transaction('rw', db.audios, async () => {
     check(task);
     if (await db.audios.get(task.key)) await db.audios.update(task.key, {
-      status: 'fail', updatedAt: Date.now(), error: error?.message || '音频生成失败',
+      status: 'fail', updatedAt: Date.now(), error: error?.message || '音频生成失败', errorCode: error?.code || null,
     });
   });
   throw error;
 }
 
 function pump() {
-  while (active.size < CONCURRENCY && queue.length) {
+  // Verify the first real request before starting a batch of concurrent requests.
+  while (!blockedError && active.size < (speechVerified ? CONCURRENCY : 1) && queue.length) {
     const task = queue.shift();
     if (task.epoch !== getDataEpoch()) { task.reject(cancelled()); continue; }
     active.add(task);
-    void generate(task).then(task.resolve, task.reject).finally(() => {
+    void generate(task).then(blob => {
+      check(task);
+      speechVerified = true;
+      task.resolve(blob);
+    }).catch(task.reject).finally(() => {
       active.delete(task);
       if (tasks.get(task.key) === task) tasks.delete(task.key);
       pump();
@@ -102,7 +141,11 @@ export async function start() {
   const [articles, pending] = await Promise.all([db.articles.toArray(), db.audios.where('status').equals('pending').toArray()]);
   if (epoch !== getDataEpoch()) return;
   const articleMap = new Map(articles.map(article => [article.id, article]));
-  pending.filter(audio => /^s:\d+:\d+$/.test(audio.key) && articleMap.has(audio.articleId))
+  if (blockedError) {
+    await failBatch(blockedError, epoch);
+    return;
+  }
+  pending.filter(audio => /^s:\d+:\d+$/.test(audio.key) && articleMap.has(audio.articleId) && !stoppedArticles.has(audio.articleId))
     .sort((a, b) => articleMap.get(a.articleId).createdAt - articleMap.get(b.articleId).createdAt
       || a.articleId - b.articleId || Number(a.key.split(':')[2]) - Number(b.key.split(':')[2]))
     .forEach(audio => enqueueKey(audio.key));
@@ -112,7 +155,11 @@ export async function start() {
 export async function enqueueArticle(articleId) {
   const epoch = getDataEpoch();
   const pending = await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'pending').toArray();
-  if (epoch !== getDataEpoch()) return;
+  if (epoch !== getDataEpoch() || stoppedArticles.has(articleId)) return;
+  if (blockedError) {
+    await failBatch(blockedError, epoch);
+    return;
+  }
   pending.sort((a, b) => Number(a.key.split(':')[2]) - Number(b.key.split(':')[2]))
     .forEach(audio => enqueueKey(audio.key));
   pump();
@@ -122,24 +169,51 @@ export async function retryFailed(articleId) {
   const epoch = getDataEpoch();
   await db.transaction('rw', db.audios, async () => {
     if (epoch !== getDataEpoch()) return;
-    await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'fail')
-      .modify({ status: 'pending', updatedAt: Date.now(), error: null });
+    await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'fail' || row.status === 'stopped'
+      || (row.status === 'ok' && (!(row.blob instanceof Blob) || !row.blob.size || !/^audio\//i.test(row.blob.type))))
+      .modify({ status: 'pending', updatedAt: Date.now(), error: null, errorCode: null });
   });
-  if (epoch === getDataEpoch()) await enqueueArticle(articleId);
+  if (epoch === getDataEpoch()) {
+    stoppedArticles.delete(articleId);
+    blockedError = null;
+    speechVerified = false;
+    await enqueueArticle(articleId);
+  }
+}
+
+export async function stopArticle(articleId) {
+  const epoch = getDataEpoch();
+  stoppedArticles.add(articleId);
+  cancelTasks(task => task.articleId === articleId);
+  await db.transaction('rw', db.audios, async () => {
+    if (epoch !== getDataEpoch()) return;
+    await db.audios.where('articleId').equals(articleId).filter(row => row.status === 'pending')
+      .modify({ status: 'stopped', updatedAt: Date.now(), error: null, errorCode: null });
+  });
+  // A pending enqueue read may have completed while the stop transaction was waiting.
+  if (epoch === getDataEpoch()) cancelTasks(task => task.articleId === articleId);
+  pump();
 }
 
 export async function ensureAudio(key, text) {
   const epoch = getDataEpoch();
   const old = await db.audios.get(key);
   if (epoch !== getDataEpoch()) throw cancelled();
-  if (old?.status === 'ok' && old.blob) return old.blob;
   if (/^s:\d+:\d+$/.test(key)) {
     if (!old) throw new Error('原文已删除');
-    if (old.status === 'fail') throw new Error('音频生成失败，请重试');
-    const task = enqueueKey(key);
-    pump();
-    return task;
+    const [article, audios] = await Promise.all([
+      db.articles.get(old.articleId), db.audios.where('articleId').equals(old.articleId).toArray(),
+    ]);
+    if (epoch !== getDataEpoch()) throw cancelled();
+    if (!article) throw new Error('原文已删除');
+    const state = getArticleAudioState(audios, article.sentenceCount);
+    if (!state.ready) throw new Error(state.error || (state.stopped ? '音频生成已停止，请继续生成后播放'
+      : state.failed ? '音频生成失败，请重试完成后播放' : '整篇音频生成完成后才能播放'));
+    return old.blob;
   }
+  if (old?.status === 'ok' && old.blob) return old.blob;
+  // An on-demand word/favorite request is an explicit retry after configuration is fixed.
+  if (blockedError) { blockedError = null; speechVerified = false; }
   const existing = tasks.get(key);
   if (existing && existing.epoch === epoch) return existing.promise;
   if (!/^(w:.+|f:\d+)$/.test(key)) throw new Error('无效音频标识');
@@ -154,7 +228,10 @@ export async function ensureAudio(key, text) {
         await db.audios.put({ key, articleId: null, status: 'ok', blob, updatedAt: Date.now() });
       });
       task.resolve(blob);
-    } catch (error) { task.reject(error); }
+    } catch (error) {
+      if (tasks.get(key) === task && isFatalServiceError(error)) await failBatch(error, epoch);
+      task.reject(error);
+    }
     finally { if (tasks.get(key) === task) tasks.delete(key); }
   })();
   return task.promise;
@@ -162,11 +239,10 @@ export async function ensureAudio(key, text) {
 
 export function reset() {
   invalidatePendingWork();
-  for (const task of tasks.values()) {
-    task.controller.abort();
-    task.reject(cancelled());
-  }
-  tasks.clear();
+  cancelTasks(() => true);
   queue = [];
   active.clear();
+  blockedError = null;
+  speechVerified = false;
+  stoppedArticles.clear();
 }

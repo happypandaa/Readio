@@ -6,6 +6,8 @@ import { resumeTranslations } from './api.js';
 import { stopPreview } from './usePreviewAudio.js';
 import ArticleList from './pages/ArticleList.jsx';
 import Study from './pages/Study.jsx';
+import { ensureBuiltinArticles } from './db.js';
+import { builtinArticles } from './builtinArticles.js';
 
 let initialized = false;
 function Application() {
@@ -15,8 +17,10 @@ function Application() {
     if (initialized) return;
     initialized = true;
     navigator.storage?.persist?.().catch(() => {});
-    start().catch(error => toast(`读取数据失败：${error.message}`));
-    resumeTranslations().catch(() => {});
+    ensureBuiltinArticles(builtinArticles).then(() => {
+      void start().catch(error => toast(`读取数据失败：${error.message}`));
+      void resumeTranslations().catch(error => toast(error.message));
+    }).catch(error => toast(`读取数据失败：${error.message}`));
   }, [toast]);
   useEffect(() => {
     stopPreview();

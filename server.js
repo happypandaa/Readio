@@ -19,29 +19,69 @@ export function createApp(env = process.env, request = fetch, options = {}) {
   const missing = ['DEEPSEEK_API_KEY', 'DOUBAO_API_KEY'].filter(key => !env[key]?.trim());
   if (missing.length) throw new Error(`请填写：${missing.join('、')}`);
 
-  const fail = (status, message) => Object.assign(new Error(message), { status });
+  const fail = (status, message, code = status < 500 ? 'invalid_request' : 'upstream_error', service = 'Readio', retryable = status >= 500) =>
+    Object.assign(new Error(message), { status, code, service, retryable });
   const safe = message => [env.DEEPSEEK_API_KEY, env.DOUBAO_API_KEY].reduce(
     (text, secret) => text.replaceAll(secret, '[已隐藏]'), String(message)).slice(0, 200);
 
-  async function post(url, body, headers, service) {
-    let response;
-    try {
-      response = await request(url, { method: 'POST', signal: AbortSignal.timeout(120_000),
-        headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    } catch { throw fail(502, service === 'DeepSeek' ? '无法连接 DeepSeek' : '无法连接豆包语音'); }
-    if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      throw fail(502, safe(data?.error?.message || data?.message || `${service} HTTP ${response.status}`));
+  function providerFailure(service, status, data) {
+    const detail = safe(data?.error?.message || data?.ResponseMetadata?.Error?.Message || data?.message || `${service} HTTP ${status}`);
+    const providerCode = String(data?.error?.code || data?.ResponseMetadata?.Error?.Code || data?.code || '');
+    const reason = `${providerCode} ${detail}`;
+    // Doubao uses 45000000 for both permissions and concurrency limits: inspect the message first.
+    if (status === 401 || /invalid[_ -]?(api[_ -]?)?key|incorrect.{0,20}key|invalid.{0,20}(credential|token)|authentication.{0,15}(fail|error)|unauthenticated|api.?key.{0,20}(invalid|expired)|密钥.{0,10}(错误|无效|过期)/i.test(reason)) {
+      return fail(502, `${service} API Key 无效或已过期，请检查配置。${detail}`, 'invalid_api_key', service, false);
     }
-    return response;
+    if (/concurrency|qps|rate[_ -]?limit|too many requests|并发|限流|请求过于频繁/i.test(reason)) {
+      return fail(502, `${service}请求过于频繁，请稍后重试。${detail}`, 'rate_limited', service, true);
+    }
+    if (status === 402 || /insufficient[_ -]?(balance|quota|funds)|balance.{0,20}(insufficient|exhaust|not enough)|quota.{0,15}(exhaust|exceed)|arrears|欠费|余额不足|余额已用完|额度.{0,10}(不足|用尽|耗尽)|资源包.{0,10}(耗尽|用完)/i.test(reason)) {
+      return fail(502, `${service}余额或可用额度不足，请充值或检查资源包。${detail}`, 'insufficient_balance', service, false);
+    }
+    if (status === 403 || /permission[_ -]?denied|access[_ -]?denied|not authorized|unauthorized|forbidden|未授权|权限不足|无权限|音色鉴权失败/i.test(reason)) {
+      return fail(502, `${service}权限不足，请检查服务或音色授权。${detail}`, 'permission_denied', service, false);
+    }
+    if (status === 429) return fail(502, `${service}请求过于频繁，请稍后重试。${detail}`, 'rate_limited', service, true);
+    if ([400, 404, 422].includes(status) || providerCode === '40402003') return fail(502, `${service}请求参数有误。${detail}`, 'invalid_request', service, false);
+    return fail(502, detail, 'upstream_error', service, true);
   }
 
-  async function json(response, service) {
+  function connectionFailure(error, service, signal) {
+    if (signal?.aborted && signal.reason?.name !== 'TimeoutError') return signal.reason;
+    if (signal?.reason?.name === 'TimeoutError' || error?.name === 'TimeoutError') {
+      return fail(502, `${service}请求超时，请检查网络后重试`, 'timeout', service, true);
+    }
+    return fail(502, service === 'DeepSeek' ? '无法连接 DeepSeek' : '无法连接豆包语音', 'network_error', service, true);
+  }
+
+  async function post(url, body, headers, service, clientSignal) {
+    const signal = AbortSignal.any([clientSignal, AbortSignal.timeout(120_000)]);
+    let response;
+    try {
+      response = await request(url, { method: 'POST', signal,
+        headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (error) { throw connectionFailure(error, service, signal); }
+    if (!response.ok) {
+      let data;
+      try { data = await response.json(); }
+      catch (error) {
+        if (signal.aborted) throw connectionFailure(error, service, signal);
+        data = null;
+      }
+      throw providerFailure(service, response.status, data);
+    }
+    return { response, signal };
+  }
+
+  async function json(response, service, signal) {
     let data;
     try { data = await response.json(); }
-    catch { throw fail(502, `${service}返回了无效响应（HTTP ${response.status}）`); }
-    if (data?.error) throw fail(502, safe(data.error.message || `${service}请求失败`));
-    if (!data || typeof data !== 'object') throw fail(502, `${service}返回了无效响应`);
+    catch (error) {
+      if (signal.aborted) throw connectionFailure(error, service, signal);
+      throw fail(502, `${service}返回了无效响应（HTTP ${response.status}）`, 'upstream_error', service);
+    }
+    if (data?.error) throw providerFailure(service, response.status, data);
+    if (!data || typeof data !== 'object') throw fail(502, `${service}返回了无效响应`, 'upstream_error', service);
     return data;
   }
 
@@ -71,6 +111,11 @@ export function createApp(env = process.env, request = fetch, options = {}) {
   }
 
   async function handle(req, res) {
+    const controller = new AbortController();
+    const abort = () => controller.abort(new DOMException('请求已取消', 'AbortError'));
+    const closed = () => { if (!res.writableEnded) abort(); };
+    req.once('aborted', abort);
+    res.once('close', closed);
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       const path = url.pathname;
@@ -92,9 +137,9 @@ export function createApp(env = process.env, request = fetch, options = {}) {
         const body = await readBody(req);
         if (!Array.isArray(body.messages) || !body.messages.length) throw fail(400, 'messages 不能为空');
         const upstream = { ...body, model: body.model || env.DEEPSEEK_MODEL || 'deepseek-flash', stream: false };
-        const response = await post('https://api.deepseek.com/chat/completions', upstream,
-          { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}` }, 'DeepSeek');
-        const data = await json(response, 'DeepSeek');
+        const { response, signal } = await post('https://api.deepseek.com/chat/completions', upstream,
+          { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}` }, 'DeepSeek', controller.signal);
+        const data = await json(response, 'DeepSeek', signal);
         return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(data));
       }
 
@@ -103,23 +148,23 @@ export function createApp(env = process.env, request = fetch, options = {}) {
         const { input, voice } = body;
         if (typeof input !== 'string' || !input.trim()) throw fail(400, 'input 不能为空，且必须是文本');
         if (voice !== undefined && (typeof voice !== 'string' || !voice.trim())) throw fail(400, 'voice 必须是非空音色 ID');
-        const response = await post('https://openspeech.bytedance.com/api/v3/tts/unidirectional', {
+        const { response, signal } = await post('https://openspeech.bytedance.com/api/v3/tts/unidirectional', {
           req_params: { text: input, speaker: voice || env.DOUBAO_VOICE || 'en_female_zendaya_p1_uranus_bigtts',
             audio_params: { format: 'mp3', sample_rate: 24000, speech_rate: 0 } },
         }, { 'X-Api-Key': env.DOUBAO_API_KEY, 'X-Api-Resource-Id': env.DOUBAO_RESOURCE_ID || 'seed-tts-2.0',
-          'X-Api-Request-Id': randomUUID() }, '豆包语音');
+          'X-Api-Request-Id': randomUUID() }, '豆包语音', controller.signal);
         let text;
-        try { text = await response.text(); } catch { throw fail(502, '无法连接豆包语音'); }
+        try { text = await response.text(); } catch (error) { throw connectionFailure(error, '豆包语音', signal); }
         const chunks = [];
         for (const line of text.split(/\r?\n/).filter(line => line.trim())) {
           let data;
-          try { data = JSON.parse(line); } catch { throw fail(502, '豆包语音返回了无效响应'); }
-          if (!data || ![0, 20000000].includes(data.code)) throw fail(502, safe(`${data?.message || data?.error?.message || '豆包语音合成失败'}（${data?.code ?? '无状态码'}）`));
+          try { data = JSON.parse(line); } catch { throw fail(502, '豆包语音返回了无效响应', 'upstream_error', '豆包语音'); }
+          if (!data || ![0, 20000000].includes(data.code)) throw providerFailure('豆包语音', 200, data);
           if (!data.data) continue;
-          if (typeof data.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.data)) throw fail(502, '豆包语音没有返回有效音频');
+          if (typeof data.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.data)) throw fail(502, '豆包语音没有返回有效音频', 'upstream_error', '豆包语音');
           chunks.push(Buffer.from(data.data, 'base64'));
         }
-        if (!chunks.length) throw fail(502, '豆包语音没有返回有效音频');
+        if (!chunks.length) throw fail(502, '豆包语音没有返回有效音频', 'upstream_error', '豆包语音');
         return res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': Buffer.concat(chunks).length })
           .end(Buffer.concat(chunks));
       }
@@ -149,10 +194,15 @@ export function createApp(env = process.env, request = fetch, options = {}) {
     } catch (error) {
       const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 502;
       const message = safe(error.message || '服务请求失败');
+      if (res.destroyed) return;
       if (!res.headersSent) {
         res.writeHead(status, { 'Content-Type': 'application/json' })
-          .end(JSON.stringify({ error: { message } }));
+          .end(JSON.stringify({ error: { message, code: error.code || 'upstream_error',
+            retryable: error.retryable ?? status >= 500, service: error.service || 'Readio' } }));
       } else res.end();
+    } finally {
+      req.removeListener('aborted', abort);
+      res.removeListener('close', closed);
     }
   }
 

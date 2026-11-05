@@ -35,6 +35,9 @@ async function errorResponse(response, status) {
   assert.deepEqual(Object.keys(data), ['error']);
   assert.equal(typeof data.error.message, 'string');
   assert.ok(data.error.message.length > 0);
+  assert.equal(typeof data.error.code, 'string');
+  assert.equal(typeof data.error.retryable, 'boolean');
+  assert.equal(typeof data.error.service, 'string');
   const serialized = JSON.stringify(data);
   for (const secret of [env.DEEPSEEK_API_KEY, env.DOUBAO_API_KEY]) {
     assert.equal(serialized.includes(secret), false, 'credentials must not appear in responses');
@@ -210,6 +213,91 @@ test('network failures use provider-specific messages without leaking credential
   await withApp(async () => { throw new Error(`network failed ${env.DEEPSEEK_API_KEY}`); }, async ({ post }) => {
     assert.equal(await errorResponse(await post('/v1/chat/completions', { messages }), 502), '无法连接 DeepSeek');
     assert.equal(await errorResponse(await post('/v1/audio/speech', { input: 'Hello.' }), 502), '无法连接豆包语音');
+  });
+});
+
+test('credential and billing errors have non-retryable codes for both services', async () => {
+  for (const [status, reason, code] of [
+    [401, 'Authentication Fails', 'invalid_api_key'],
+    [402, 'Insufficient Balance', 'insufficient_balance'],
+    [403, 'access denied', 'permission_denied'],
+    [429, 'insufficient_quota', 'insufficient_balance'],
+  ]) {
+    await withApp(async () => Response.json({ error: { message: reason } }, { status }), async ({ post }) => {
+      for (const [path, body, service] of [
+        ['/v1/chat/completions', { messages }, 'DeepSeek'],
+        ['/v1/audio/speech', { input: 'Hello.' }, '豆包语音'],
+      ]) {
+        const response = await post(path, body);
+        assert.equal(response.status, 502);
+        const { error } = await response.json();
+        assert.equal(error.code, code);
+        assert.equal(error.retryable, false);
+        assert.equal(error.service, service);
+        assert.match(error.message, /Key|余额|权限/);
+      }
+    });
+  }
+});
+
+test('Doubao distinguishes permissions, concurrency limits and exhausted quota in business frames', async () => {
+  // V3 documents the same 45000000 code for permissions and concurrency limits.
+  for (const [message, code, retryable] of [
+    ['speaker permission denied: get resource id: access denied', 'permission_denied', false],
+    ['quota exceeded for types: concurrency', 'rate_limited', true],
+    ['quota exhausted', 'insufficient_balance', false],
+    ['invalid api key', 'invalid_api_key', false],
+  ]) {
+    await withApp(async () => speechFrames([{ code: 45000000, message }]), async ({ post }) => {
+      const response = await post('/v1/audio/speech', { input: 'Hello.' });
+      assert.equal(response.status, 502);
+      const { error } = await response.json();
+      assert.equal(error.code, code);
+      assert.equal(error.retryable, retryable);
+      assert.equal(error.service, '豆包语音');
+    });
+  }
+});
+
+test('network failures and timeouts remain retryable and distinguishable', async () => {
+  for (const [failure, code] of [
+    [new Error('network unavailable'), 'network_error'],
+    [new DOMException('timed out', 'TimeoutError'), 'timeout'],
+  ]) {
+    await withApp(async () => { throw failure; }, async ({ post }) => {
+      const { error } = await (await post('/v1/audio/speech', { input: 'Hello.' })).json();
+      assert.equal(error.code, code);
+      assert.equal(error.retryable, true);
+    });
+  }
+});
+
+test('disconnecting a synthesis request aborts the upstream fetch', async () => {
+  let began;
+  let cancelled;
+  const started = new Promise(resolve => { began = resolve; });
+  const stopped = new Promise(resolve => { cancelled = resolve; });
+  await withApp(async (_url, { signal }) => {
+    began();
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => { cancelled(); reject(signal.reason); }, { once: true });
+    });
+  }, async ({ base }) => {
+    const controller = new AbortController();
+    const response = fetch(`${base}/v1/audio/speech`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: 'Hello.' }), signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    await assert.rejects(response, { name: 'AbortError' });
+    await Promise.race([
+      stopped,
+      new Promise((_resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('upstream was not cancelled')), 1000);
+        timer.unref();
+      }),
+    ]);
   });
 });
 

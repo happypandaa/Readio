@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import db, { setFinished, setLastIndex } from './db.js';
+import db, { getDataEpoch, setFinished, setLastIndex } from './db.js';
 import { retryFailed } from './audioQueue.js';
+import { getArticleAudioState } from './audioState.js';
 import { stopPreview } from './usePreviewAudio.js';
 import { errorMessage, useToast } from './toast.jsx';
 
-export default function usePlayer({ articleId, count, initialIndex = 0, speed = 1 }) {
+export default function usePlayer({ articleId, count, initialIndex = 0, speed = 1, ready = false }) {
   const toast = useToast();
   const [state, setState] = useState({ cur: initialIndex, playing: false, waiting: false });
   const runtime = useRef({ cur: initialIndex, playing: false, sequence: 0, alive: true, audio: null, url: null, timer: null });
   const attemptRef = useRef(null);
   const speedRef = useRef(speed);
   speedRef.current = speed;
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
 
   const clearTimer = useCallback(() => {
     clearTimeout(runtime.current.timer);
@@ -35,41 +38,36 @@ export default function usePlayer({ articleId, count, initialIndex = 0, speed = 
 
   const playFrom = useCallback(index => {
     if (index < 0 || index >= count) return;
+    if (!readyRef.current) { toast('文章音频全部生成后可播放'); return; }
     const current = runtime.current;
     const sequence = ++current.sequence;
     clearTimer();
     current.audio?.pause();
     stopPreview();
     move(index);
-    update({ playing: true, waiting: false });
+    update({ playing: true, waiting: true });
     void attemptRef.current(index, sequence);
-  }, [clearTimer, count, move, update]);
+  }, [clearTimer, count, move, toast, update]);
 
   attemptRef.current = async (index, sequence) => {
     const current = runtime.current;
-    const valid = () => current.alive && sequence === current.sequence && current.playing;
+    const epoch = getDataEpoch();
+    const valid = () => current.alive && sequence === current.sequence && current.playing && epoch === getDataEpoch();
     try {
-      const record = await db.audios.get(`s:${articleId}:${index}`);
+      const audios = await db.audios.where('articleId').equals(articleId).toArray();
       if (!valid()) return;
-      if (!record) { pause(); return; }
-      if (record.status === 'pending') {
-        update({ waiting: true });
-        current.timer = setTimeout(() => { void attemptRef.current(index, sequence); }, 500);
+      if (!readyRef.current || !getArticleAudioState(audios, count).ready) {
+        pause();
+        toast('文章音频全部生成后可播放');
         return;
       }
+      const record = audios.find(audio => audio.key === `s:${articleId}:${index}`);
+      if (!record) { pause(); return; }
       const next = () => {
         if (!valid()) return;
         if (index + 1 < count) current.timer = setTimeout(() => playFrom(index + 1), 300);
         else pause();
       };
-      if (record.status === 'fail' || !record.blob) {
-        update({ waiting: false });
-        toast(`第 ${index + 1} 句音频生成失败`, {
-          label: '重试', fn: () => { void retryFailed(articleId).catch(error => toast(errorMessage(error))); },
-        });
-        next();
-        return;
-      }
       const audio = current.audio ||= new Audio();
       if (current.url) URL.revokeObjectURL(current.url);
       current.url = URL.createObjectURL(record.blob);
@@ -86,13 +84,14 @@ export default function usePlayer({ articleId, count, initialIndex = 0, speed = 
       };
       audio.onerror = () => {
         if (!valid()) return;
+        pause();
+        void db.audios.update(record.key, { status: 'fail', blob: null, error: `第 ${index + 1} 句音频无法播放，请重试生成` })
+          .catch(error => toast(errorMessage(error)));
         toast(`第 ${index + 1} 句音频无法播放`, {
           label: '重试', fn: () => {
-            void db.audios.update(record.key, { status: 'fail', blob: null })
-              .then(() => retryFailed(articleId)).catch(error => toast(errorMessage(error)));
+            void retryFailed(articleId).catch(error => toast(errorMessage(error)));
           },
         });
-        next();
       };
       update({ waiting: false });
       try { await audio.play(); }
@@ -137,6 +136,9 @@ export default function usePlayer({ articleId, count, initialIndex = 0, speed = 
   useEffect(() => {
     if (runtime.current.audio) runtime.current.audio.playbackRate = speed;
   }, [speed]);
+  useEffect(() => {
+    if (!ready) pause();
+  }, [ready, pause]);
 
   return { ...state, playFrom, pause, toggle, seek, step };
 }

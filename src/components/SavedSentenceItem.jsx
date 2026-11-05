@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { removeSaved, restoreSaved } from '../db.js';
+import { useLiveQuery } from 'dexie-react-hooks';
+import db, { removeSaved, restoreSaved } from '../db.js';
+import { getArticleAudioState } from '../audioState.js';
 import { translateSavedSentence } from '../api.js';
 import { usePreviewAudio } from '../usePreviewAudio.js';
 import { useToast } from '../toast.jsx';
@@ -11,6 +13,14 @@ export default function SavedSentenceItem({ item, articleExists, compact = false
   const [retrying, setRetrying] = useState(false);
   const key = articleExists ? `s:${item.articleId}:${item.idx}` : `f:${item.id}`;
   const playing = playingKey === key;
+  const ready = useLiveQuery(async () => {
+    if (!articleExists) return true;
+    const [article, audios] = await Promise.all([
+      db.articles.get(item.articleId), db.audios.where('articleId').equals(item.articleId).toArray(),
+    ]);
+    return Boolean(article && getArticleAudioState(audios, article.sentenceCount).ready);
+  }, [articleExists, item.articleId], false);
+  const canPlay = !articleExists || ready;
   async function remove() {
     try {
       const previous = await removeSaved('savedSentences', item.id);
@@ -25,7 +35,7 @@ export default function SavedSentenceItem({ item, articleExists, compact = false
     catch (error) { toast(error.message); }
     finally { setRetrying(false); }
   }
-  const playButton = (iconOnly = false) => <button className={`${iconOnly ? 'ic' : 'act'}${playing ? ' on' : ''}`} onClick={event => { event.stopPropagation(); play(key, item.text); }} aria-label={playing ? '停止' : '播放'}>
+  const playButton = (iconOnly = false) => <button className={`${iconOnly ? 'ic' : 'act'}${playing ? ' on' : ''}`} disabled={!canPlay && !playing} title={!canPlay && !playing ? '文章音频全部生成后可播放' : playing ? '停止' : '播放'} onClick={event => { event.stopPropagation(); if (canPlay || playing) play(key, item.text); }} aria-label={playing ? '停止' : '播放'}>
     <Icon name={playing ? 'stop' : 'play'} />{!iconOnly && (playing ? '停止' : '播放')}
   </button>;
   if (compact && !expanded) return <div className="fav compact" role="button" tabIndex={0} aria-expanded="false" onClick={onToggle} onKeyDown={event => {

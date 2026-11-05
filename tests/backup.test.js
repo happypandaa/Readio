@@ -79,6 +79,19 @@ test('lookup schemas, translation status and supported settings are enforced', (
   invalid(value => value.data.settings.push({ key: '__proto__', value: {} }));
 });
 
+test('builtin article markers allow valid and legacy backups but reject malformed or duplicate keys', () => {
+  const value = fixture();
+  value.data.settings.push({ key: 'builtinArticles', value: [
+    'how-language-shapes-the-way-we-think', 'saying-no-at-work-can-be-good-for-your-health',
+  ] });
+  assert.deepEqual(validateBackup(value), value);
+  assert.deepEqual(validateBackup(fixture()), fixture(), 'older backups need no builtin marker');
+  for (const marker of [null, {}, 'article-key', [42], [''], ['same-key', 'same-key'],
+    ['../outside'], ['__proto__'], ['a'.repeat(129)], Array.from({ length: 1001 }, (_, index) => `article-${index}`)]) {
+    invalid(backup => backup.data.settings.push({ key: 'builtinArticles', value: marker }));
+  }
+});
+
 test('readBackup validates file bytes, JSON and the complete schema', async () => {
   const value = fixture();
   const file = new Blob([JSON.stringify(value)], { type: 'application/json' });

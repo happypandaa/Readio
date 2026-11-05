@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useLiveQuery } from 'dexie-react-hooks';
 import db, { setLastIndex, setSetting, toggleSavedSentence, touchArticle } from '../db.js';
 import { translateSentence } from '../api.js';
-import { retryFailed } from '../audioQueue.js';
+import { getArticleAudioState } from '../audioState.js';
 import usePlayer from '../usePlayer.js';
 import { errorMessage, useToast } from '../toast.jsx';
 import ArticleText from '../components/ArticleText.jsx';
@@ -10,6 +10,7 @@ import SentenceToolbar from '../components/SentenceToolbar.jsx';
 import PlayerBar from '../components/PlayerBar.jsx';
 import WordCard from '../components/WordCard.jsx';
 import Icon from '../components/Icon.jsx';
+import AudioGenerationStatus from '../components/AudioGenerationStatus.jsx';
 
 export default function Study({ articleId, focus = null }) {
   const [entry, setEntry] = useState(null);
@@ -48,18 +49,16 @@ function StudyContent({ entry }) {
   }, [articleId], null);
   const savedSpeed = useLiveQuery(() => db.settings.get('speed'), [], null);
   const speed = savedSpeed?.value || 1;
-  const player = usePlayer({ articleId, count: entry.sentenceCount, initialIndex: entry.initialIndex, speed });
+  const { ready } = getArticleAudioState(data?.audios || [], entry.sentenceCount);
+  const player = usePlayer({ articleId, count: entry.sentenceCount, initialIndex: entry.initialIndex, speed, ready });
   const textRef = useRef(null);
   const [expanded, setExpanded] = useState(new Set());
   const [translationStatus, setTranslationStatus] = useState({});
   const [selection, setSelection] = useState(null);
-  const [hover, setHover] = useState(null);
+  const [active, setActive] = useState(null);
   const [flash, setFlash] = useState(entry.focus == null ? null : entry.initialIndex);
-  const [touchToolbar, setTouchToolbar] = useState(() => matchMedia('(hover: none), (max-width: 640px)').matches);
   const [follow, setFollow] = useState(true);
   const [scrolled, setScrolled] = useState(window.scrollY > 4);
-  const hoverRef = useRef(null);
-  const hideTimer = useRef(null), switchTimer = useRef(null);
   const selectionRef = useRef(selection);
   const followRef = useRef(true), programUntil = useRef(0), lastCur = useRef(null);
   const playingRef = useRef(player.playing);
@@ -71,17 +70,10 @@ function StudyContent({ entry }) {
     if (data && !data.article) location.hash = '#/';
   }, [data]);
   useEffect(() => {
-    const media = matchMedia('(hover: none), (max-width: 640px)');
-    const change = () => setTouchToolbar(media.matches);
-    media.addEventListener('change', change);
-    return () => media.removeEventListener('change', change);
-  }, []);
-  useEffect(() => {
     if (flash == null) return;
     const timer = setTimeout(() => setFlash(null), 2000);
     return () => clearTimeout(timer);
   }, [flash]);
-  useEffect(() => () => { clearTimeout(hideTimer.current); clearTimeout(switchTimer.current); }, []);
 
   const scrollCurrent = useCallback((smooth = true, force = false) => {
     const sentence = textRef.current?.querySelector(`.sx[data-i="${player.cur}"]`);
@@ -133,23 +125,13 @@ function StudyContent({ entry }) {
     };
   }, []);
 
-  const clearHover = () => { hoverRef.current = null; setHover(null); };
-  const enterSentence = index => {
-    if (touchToolbar || selectionRef.current) return;
-    clearTimeout(hideTimer.current); clearTimeout(switchTimer.current);
-    if (hoverRef.current == null) { hoverRef.current = index; setHover(index); }
-    else if (hoverRef.current !== index) switchTimer.current = setTimeout(() => { hoverRef.current = index; setHover(index); }, 160);
-  };
-  const leaveSentence = target => {
-    if (touchToolbar || selectionRef.current) return;
-    if (target?.closest?.('#sbar') || target?.closest?.(`.sx[data-i="${hoverRef.current}"]`)) return;
-    clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(clearHover, 220);
+  const activateSentence = index => {
+    setActive(index);
+    setSelection(null);
   };
   const openWord = item => {
+    if (active !== item.idx) return;
     player.pause();
-    clearTimeout(hideTimer.current); clearTimeout(switchTimer.current);
-    clearHover();
     setSelection(item);
   };
   const closeWord = useCallback(() => {
@@ -192,49 +174,56 @@ function StudyContent({ entry }) {
   const step = direction => { enableFollow(); setSelection(null); player.step(direction); };
   useEffect(() => {
     const keydown = event => {
-      if (event.key === 'Escape') { if (selectionRef.current) { event.preventDefault(); closeWord(); } return; }
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+      if (event.defaultPrevented) return;
+      if (event.key === 'Escape') {
+        if (selectionRef.current) { event.preventDefault(); closeWord(); }
+        else if (active != null) {
+          event.preventDefault();
+          textRef.current?.querySelector(`.sx[data-i="${active}"]`)?.focus({ preventScroll: true });
+          setActive(null);
+        }
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
       if (event.target.closest?.('input,textarea,select,[contenteditable="true"],.pop') || selectionRef.current) return;
+      if (event.key === ' ' && event.target.closest?.('button')) return;
       if (event.key === ' ') { event.preventDefault(); player.toggle(); }
       else if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
       else if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
-      else if (event.key.toLowerCase() === 't') { event.preventDefault(); toggleTranslation(player.cur); }
-      else if (event.key.toLowerCase() === 's') { event.preventDefault(); void toggleSave(player.cur); }
+      else if (event.key.toLowerCase() === 't') { event.preventDefault(); toggleTranslation(active ?? player.cur); }
+      else if (event.key.toLowerCase() === 's') { event.preventDefault(); void toggleSave(active ?? player.cur); }
     };
     document.addEventListener('keydown', keydown);
     return () => document.removeEventListener('keydown', keydown);
   });
 
   if (!data?.article) return <main className="wrap"><p className="hint" role="status">加载中…</p></main>;
-  const pending = data.audios.filter(item => item.status === 'pending').length;
-  const failed = data.audios.filter(item => item.status === 'fail').length;
-  const toolbarIndex = selection ? null : touchToolbar ? player.cur : hover;
+  const toolbarIndex = selection ? null : active;
   const selectedSentence = selection && data.sentences.find(item => item.idx === selection.idx);
   return <main id="pageStudy">
     <header className={`s-top${scrolled ? ' scrolled' : ''}`} id="studyTop">
       <div className="wrap bar">
         <button className="back" id="backBtn" aria-label="返回文章列表" onClick={() => { location.hash = '#/'; }}><Icon name="back" /><span>返回</span></button>
         <div className="s-title" id="studyTitle">{data.article.title}</div>
-        <div className="s-audio num" id="studyAudio">{pending ? `音频 ${entry.sentenceCount - pending}/${entry.sentenceCount}`
-          : failed ? <button className="link" style={{ color: 'var(--danger)' }} title={`${failed} 句音频生成失败`} onClick={() => retryFailed(articleId).catch(error => toast(errorMessage(error)))}>重试音频</button> : null}</div>
+        <div className="s-audio num" id="studyAudio" />
       </div>
     </header>
     <article className="wrap doc">
+      <AudioGenerationStatus article={data.article} audios={data.audios} />
       <h1 className="doc-title" id="docTitle" lang="en">{data.article.title}</h1>
-      <ArticleText sentences={data.sentences} current={player.cur} hover={selection ? null : hover} flash={flash}
+      <ArticleText sentences={data.sentences} current={player.cur} active={active} flash={flash}
         savedSentences={data.savedSentences} savedWords={data.savedWords} expanded={expanded} translationStatus={translationStatus}
-        selection={selection} onWord={openWord} onSentenceEnter={enterSentence} onSentenceLeave={leaveSentence}
+        selection={selection} onWord={openWord} onActivate={activateSentence}
         onRetry={requestTranslation} textRef={textRef} />
       <SentenceToolbar index={toolbarIndex} textRef={textRef} layoutKey={`${[...expanded].join(',')}|${data.savedSentences.length}|${data.savedWords.length}|${data.sentences.map(item => Boolean(item.zh)).join('')}`}
-        saved={data.savedSentences.some(item => item.idx === toolbarIndex)} expanded={expanded.has(toolbarIndex)}
-        onPlay={playAt} onTranslate={toggleTranslation} onSave={toggleSave}
-        onEnter={() => { clearTimeout(hideTimer.current); clearTimeout(switchTimer.current); }} onLeave={leaveSentence} />
+        saved={data.savedSentences.some(item => item.idx === toolbarIndex)} expanded={expanded.has(toolbarIndex)} audioReady={ready}
+        onPlay={playAt} onTranslate={toggleTranslation} onSave={toggleSave} />
     </article>
     {!follow && <button className="follow" id="followBtn" onClick={() => { enableFollow(); scrollCurrent(true, true); }}>回到当前句</button>}
     <PlayerBar current={player.cur} count={entry.sentenceCount} playing={player.playing} waiting={player.waiting}
-      audios={data.audios} speed={speed} onToggle={player.toggle} onStep={step} onSeek={seek}
+      audios={data.audios} speed={speed} ready={ready} onToggle={player.toggle} onStep={step} onSeek={seek}
       onSpeed={value => setSetting('speed', value).catch(error => toast(errorMessage(error)))} />
     {selection && selectedSentence && <WordCard key={`${selection.idx}|${selection.word.toLowerCase()}`} article={data.article} sentence={selectedSentence}
-      selection={selection} saved={data.savedWords.some(item => item.idx === selection.idx && item.word.toLowerCase() === selection.word.toLowerCase())} onClose={closeWord} />}
+      selection={selection} audioReady={ready} saved={data.savedWords.some(item => item.idx === selection.idx && item.word.toLowerCase() === selection.word.toLowerCase())} onClose={closeWord} />}
   </main>;
 }
