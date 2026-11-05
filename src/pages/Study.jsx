@@ -13,6 +13,11 @@ import Icon from '../components/Icon.jsx';
 import AudioGenerationStatus, { audioDurationLabel, useGenerateAudio } from '../components/AudioGenerationStatus.jsx';
 import TranslationBar from '../components/TranslationBar.jsx';
 
+// 触屏设备没有悬停：工具条固定显示在当前句上。
+const TOUCH = typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches;
+const HOVER_SWITCH_MS = 150;
+const HOVER_HIDE_MS = 220;
+
 export default function Study({ articleId, focus = null }) {
   const [entry, setEntry] = useState(null);
   const toast = useToast();
@@ -69,6 +74,9 @@ function StudyContent({ entry }) {
   const [follow, setFollow] = useState(true);
   const [scrolled, setScrolled] = useState(window.scrollY > 4);
   const selectionRef = useRef(selection);
+  // 工具条的显示来源：hover 鼠标悬停 / focus 键盘焦点。
+  const activeRef = useRef(active), activeSource = useRef(null), hoverTimer = useRef(null), pendingIndex = useRef(null);
+  activeRef.current = active;
   const followRef = useRef(true), programUntil = useRef(0), lastCur = useRef(null);
   const playingRef = useRef(player.playing);
   const saving = useRef(new Set());
@@ -118,6 +126,8 @@ function StudyContent({ entry }) {
     };
     const onScroll = () => {
       setScrolled(window.scrollY > 4);
+      // 用户滚动页面时收起悬停工具条；程序自动跟随当前句的滚动不收起。
+      if (activeSource.current === 'hover' && Date.now() > programUntil.current) hideToolbar();
       if (playingRef.current && followRef.current && Date.now() > programUntil.current) manual();
     };
     const onKey = event => {
@@ -134,19 +144,52 @@ function StudyContent({ entry }) {
     };
   }, []);
 
+  const clearHoverTimer = () => { clearTimeout(hoverTimer.current); pendingIndex.current = null; };
+  const showToolbar = (index, source) => { clearHoverTimer(); activeSource.current = source; setActive(index); };
+  const hideToolbar = useCallback(() => {
+    clearTimeout(hoverTimer.current);
+    pendingIndex.current = null;
+    activeSource.current = null;
+    setActive(null);
+  }, []);
   const activateSentence = index => {
-    setActive(index);
+    showToolbar(index, 'focus');
     setSelection(null);
   };
+  const hoverSentence = index => {
+    if (TOUCH || selectionRef.current) return;
+    if (activeRef.current === index) { clearHoverTimer(); return; }
+    if (activeRef.current == null) { showToolbar(index, 'hover'); return; }
+    // 从一句移到另一句时稍等，方便鼠标经过别的句子移到工具条上。
+    if (pendingIndex.current === index) return;
+    clearTimeout(hoverTimer.current);
+    pendingIndex.current = index;
+    hoverTimer.current = setTimeout(() => showToolbar(index, 'hover'), HOVER_SWITCH_MS);
+  };
+  const leaveHover = related => {
+    if (TOUCH || activeSource.current !== 'hover') return;
+    if (related?.closest?.('#sbar') || related?.closest?.(`.sx[data-i="${activeRef.current}"]`)) return;
+    if (related?.closest?.('.sx')) return; // 移到另一句：由 hoverSentence 处理切换
+    clearHoverTimer();
+    hoverTimer.current = setTimeout(hideToolbar, HOVER_HIDE_MS);
+  };
+  const leaveFocus = related => {
+    if (activeSource.current !== 'focus') return;
+    if (related?.closest?.('#sbar') || related?.closest?.(`.sx[data-i="${activeRef.current}"]`)) return;
+    hideToolbar();
+  };
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
   const openWord = item => {
-    if (active !== item.idx) return;
+    clearHoverTimer();
     player.pause();
     setSelection(item);
   };
   const closeWord = useCallback(() => {
     selectionRef.current?.element?.focus({ preventScroll: true });
     setSelection(null);
-  }, []);
+    // 关闭查词卡片后工具条不自动回来，鼠标再次移动到句子上才出现；键盘操作保留当前句。
+    if (activeSource.current !== 'focus') hideToolbar();
+  }, [hideToolbar]);
 
   const requestTranslation = async index => {
     const sentence = data?.sentences.find(item => item.idx === index);
@@ -213,8 +256,7 @@ function StudyContent({ entry }) {
         if (selectionRef.current) { event.preventDefault(); closeWord(); }
         else if (active != null) {
           event.preventDefault();
-          textRef.current?.querySelector(`.sx[data-i="${active}"]`)?.focus({ preventScroll: true });
-          setActive(null);
+          hideToolbar();
         }
         return;
       }
@@ -232,7 +274,7 @@ function StudyContent({ entry }) {
   });
 
   if (!data?.article) return <main className="wrap"><p className="hint" role="status">加载中…</p></main>;
-  const toolbarIndex = selection ? null : active;
+  const toolbarIndex = selection ? null : TOUCH ? player.cur : active;
   const selectedSentence = selection && data.sentences.find(item => item.idx === selection.idx);
   return <main id="pageStudy">
     <header className={`s-top${scrolled ? ' scrolled' : ''}`} id="studyTop">
@@ -251,10 +293,12 @@ function StudyContent({ entry }) {
       <ArticleText sentences={data.sentences} current={player.cur} active={active} flash={flash}
         savedSentences={data.savedSentences} savedWords={data.savedWords} expanded={visible} translationStatus={translationStatus}
         selection={selection} onWord={openWord} onActivate={activateSentence}
+        onHover={hoverSentence} onLeave={leaveHover} onFocusLeave={leaveFocus}
         onRetry={requestTranslation} textRef={textRef} />
       <SentenceToolbar index={toolbarIndex} textRef={textRef} layoutKey={`${[...visible].join(',')}|${data.savedSentences.length}|${data.savedWords.length}|${data.sentences.map(item => Boolean(item.zh)).join('')}`}
         saved={data.savedSentences.some(item => item.idx === toolbarIndex)} expanded={visible.has(toolbarIndex)} audioReady={ready}
-        onPlay={playAt} onTranslate={toggleTranslation} onSave={toggleSave} />
+        onPlay={playAt} onTranslate={toggleTranslation} onSave={toggleSave}
+        onMouseEnter={clearHoverTimer} onMouseLeave={leaveHover} onBlur={leaveFocus} />
     </article>
     {!follow && <button className="follow" id="followBtn" onClick={() => { enableFollow(); scrollCurrent(true, true); }}>回到当前句</button>}
     <PlayerBar current={player.cur} count={entry.sentenceCount} playing={player.playing} waiting={player.waiting}

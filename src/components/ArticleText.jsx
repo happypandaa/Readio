@@ -3,7 +3,7 @@ import { tokenize } from '../text.js';
 import Icon from './Icon.jsx';
 
 export default function ArticleText({ sentences, current, active, flash, savedSentences, savedWords,
-  expanded, translationStatus, selection, onWord, onActivate, onRetry, textRef }) {
+  expanded, translationStatus, selection, onWord, onActivate, onHover, onLeave, onFocusLeave, onRetry, textRef }) {
   const paragraphs = useMemo(() => {
     const result = [];
     for (const sentence of sentences) {
@@ -15,14 +15,22 @@ export default function ArticleText({ sentences, current, active, flash, savedSe
   const sentenceSet = new Set(savedSentences.map(item => item.idx));
   const wordSet = new Set(savedWords.map(item => `${item.idx}|${item.word.toLowerCase()}`));
 
-  return <div id="sents" ref={textRef}>
+  // 工具条：鼠标悬停句子时出现（onHover / onLeave），键盘 Tab 到句子时出现（onActivate / onFocusLeave）。
+  return <div id="sents" ref={textRef}
+    onMouseMove={event => { const sentence = event.target.closest?.('.sx'); if (sentence) onHover(Number(sentence.dataset.i)); }}
+    onMouseOut={event => { if (event.target.closest?.('.sx')) onLeave(event.relatedTarget); }}>
     {paragraphs.map((paragraph, paragraphIndex) => <p className="para" lang="en" key={paragraphIndex}>
       {paragraph.map((sentence, sentenceIndex) => <Fragment key={sentence.idx}>
         {sentenceIndex > 0 ? ' ' : null}
         <span className={['sx', current === sentence.idx && 'cur', active === sentence.idx && 'active', flash === sentence.idx && 'flash'].filter(Boolean).join(' ')}
-          data-i={sentence.idx} role={active === sentence.idx ? 'group' : 'button'} tabIndex={0}
-          aria-label={`第 ${sentence.idx + 1} 句${active === sentence.idx ? '，已激活，可选择单词查词' : '，点击或按回车激活'}`}
-          onClick={() => onActivate(sentence.idx)} onKeyDown={event => {
+          data-i={sentence.idx} role="group" tabIndex={0}
+          aria-label={`第 ${sentence.idx + 1} 句${active === sentence.idx ? '，可按 Tab 选择单词查词，T 翻译，S 收藏' : ''}`}
+          onFocus={event => {
+            // 只响应键盘焦点；鼠标点击句子获得的焦点不弹出工具条（鼠标用悬停）。
+            if (event.target === event.currentTarget && event.currentTarget.matches(':focus-visible')) onActivate(sentence.idx);
+          }}
+          onBlur={event => onFocusLeave(event.relatedTarget)}
+          onKeyDown={event => {
             if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
             event.preventDefault();
             onActivate(sentence.idx);
@@ -32,7 +40,6 @@ export default function ArticleText({ sentences, current, active, flash, savedSe
               selection?.idx === sentence.idx && selection.tokenIndex === tokenIndex && 'sel'].filter(Boolean).join(' ')}
               data-w={token.value} key={tokenIndex} aria-label={active === sentence.idx ? `查词 ${token.value}` : undefined}
               onClick={event => {
-                if (active !== sentence.idx) return;
                 event.stopPropagation();
                 onWord({ word: token.value, idx: sentence.idx, tokenIndex, element: event.currentTarget });
               }}

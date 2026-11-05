@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 
-export default function SentenceToolbar({ index, textRef, saved, expanded, audioReady, layoutKey, onPlay, onTranslate, onSave }) {
+export default function SentenceToolbar({ index, textRef, saved, expanded, audioReady, layoutKey, onPlay, onTranslate, onSave,
+  onMouseEnter, onMouseLeave, onBlur }) {
   const barRef = useRef(null);
   const [position, setPosition] = useState(null);
   useLayoutEffect(() => {
@@ -36,7 +37,8 @@ export default function SentenceToolbar({ index, textRef, saved, expanded, audio
   }, [index, layoutKey, textRef]);
   if (index == null) return null;
   return <div className="sbar" id="sbar" ref={barRef} role="toolbar" aria-label={`第 ${index + 1} 句操作`}
-    style={position || { visibility: 'hidden' }}>
+    style={position || { visibility: 'hidden' }} onMouseEnter={onMouseEnter}
+    onMouseLeave={event => onMouseLeave?.(event.relatedTarget)} onBlur={event => onBlur?.(event.relatedTarget)}>
     <button className="ic" disabled={!audioReady} aria-label="从这句开始播放" title={audioReady ? '从这句开始播放' : '全部音频生成完成后可播放'} onClick={() => onPlay(index)}><Icon name="play" /></button>
     <button className={`ic tr${expanded ? ' on' : ''}`} aria-label="翻译" aria-pressed={expanded} title="翻译 (T)" onClick={() => onTranslate(index)}>译</button>
     <button className={`ic star${saved ? ' on' : ''}`} aria-label={saved ? '取消收藏' : '收藏句子'} aria-pressed={saved} title="收藏句子 (S)" onClick={() => onSave(index)}><Icon name={saved ? 'starOn' : 'star'} /></button>
