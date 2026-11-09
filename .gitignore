@@ -1,9 +1,15 @@
 node_modules/
 .env
 .env.*
-!.env.example
 *.log
 .DS_Store
 readio-backup-*.json
 backups/
 data/
+
+.env*
+.test-artifacts/
+coverage/
+test-results/
+playwright-report/
+!.env.example

@@ -1,13 +1,23 @@
 {
-  "manifestVersion": 1,
-  "runtime": "node",
+  "manifestVersion": 2,
   "app": {
     "name": "Readio",
     "version": "0.1.0",
     "description": "个人英语听读：逐句音频、翻译查词、句子与生词收藏。"
   },
-  "web": { "root": "dist", "entry": "index.html" },
-  "backend": { "root": ".", "entry": "managed.mjs", "nodeMajor": 24, "protocolVersion": 1, "apiPrefixes": ["/v1"] },
+  "web": {
+    "root": "dist",
+    "entry": "index.html"
+  },
+  "backend": {
+    "root": ".",
+    "entry": "managed.mjs",
+    "nodeMajor": 24,
+    "protocolVersion": 1,
+    "apiPrefixes": [
+      "/v1"
+    ]
+  },
   "configuration": {
     "version": 1,
     "fields": [
@@ -18,7 +28,10 @@
         "required": true,
         "secret": true,
         "description": "用于句子翻译和查词，调用 DeepSeek 开放平台。",
-        "howToGet": ["打开 https://platform.deepseek.com/api_keys", "登录后创建一个 API Key 并复制"]
+        "howToGet": [
+          "打开 https://platform.deepseek.com/api_keys",
+          "登录后创建一个 API Key 并复制"
+        ]
       },
       {
         "name": "DOUBAO_API_KEY",
@@ -27,11 +40,15 @@
         "required": true,
         "secret": true,
         "description": "用于逐句英文朗读，调用火山引擎豆包语音 V3。",
-        "howToGet": ["打开火山引擎语音控制台的「API Key 管理」", "创建一个 API Key 并复制"]
+        "howToGet": [
+          "打开火山引擎语音控制台的「API Key 管理」",
+          "创建一个 API Key 并复制"
+        ]
       }
     ]
   },
   "documentation": {
-    "readme": "README.md"
+    "readme": "README.md",
+    "development": "docs/development.md"
   }
 }
