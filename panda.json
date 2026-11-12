@@ -3,7 +3,8 @@
   "app": {
     "name": "Readio",
     "version": "0.1.0",
-    "description": "个人英语听读：逐句音频、翻译查词、句子与生词收藏。"
+    "description": "个人英语听读：逐句音频、翻译查词、句子与生词收藏。",
+    "icon": "assets/app-icon-512.png"
   },
   "web": {
     "root": "dist",
