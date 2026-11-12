@@ -11,9 +11,9 @@
 首次打开前，在平台配置表单填写：
 
 - **DeepSeek API Key**：用于翻译和查词。
-- **豆包语音 API Key**：用于逐句朗读。
+- **Fish Audio API Key**：用于逐句朗读，默认采用吐字清晰、语速平稳的美式英语女声 Jessica。[创建 Fish Audio API Key](https://fish.audio/app/api-keys/) · [Jessica 音色](https://fish.audio/m/a18851e0129d4a43bf7589961cb6f300/)
 
-两项服务均由对应服务提供方按实际用量收费，额度和价格以服务提供方为准。密钥由平台保存并只交给后台，不需要发给 AI，也不需要自己创建 `.env`。
+Fish Audio 默认使用 `s2.1-pro-free`，可在平台配置里选填 `FISH_MODEL`。额度和价格以服务提供方为准，密钥由平台保存并只交给后台。[Fish Audio 模型与额度](https://fish.audio/developers/)
 
 ## 使用
 

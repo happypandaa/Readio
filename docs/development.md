@@ -10,7 +10,7 @@
 
 本应用采用统一应用清单 v2，带可选后台（声明 `backend`），通过根目录 `panda.json` 声明入口和配置。前端为 Vite 构建产物（`dist/`），后端 `managed.mjs` 遵守平台控制协议。平台规则见熊猫小抽屉随附的 skill。
 
-在平台「添加本地项目」选择本目录，或「从 Git 添加」本仓库。两把密钥（DeepSeek、豆包）在平台配置表单填写，由平台注入后端，无需维护 `.env`。模型、资源 ID 和音色使用内置默认值，如需修改请改代码。
+在平台「添加本地项目」选择本目录，或「从 Git 添加」本仓库。在平台配置表单填写 DeepSeek 和 Fish Audio 的密钥。Fish 模型使用内置默认值，也可在表单中填写 `FISH_MODEL`。
 
 后端接口使用 `/v1`，在 `panda.json` 的 `backend.apiPrefixes` 中声明。平台须采用支持该字段及标准 HTTP 健康回复的构建；前后端入口和原有浏览器数据存储继续使用原来的位置。
 
@@ -31,12 +31,12 @@ pnpm run dev
 PORT=8787
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 DEEPSEEK_MODEL=deepseek-flash
-DOUBAO_API_KEY=你的豆包语音APIKey
-DOUBAO_RESOURCE_ID=seed-tts-2.0
-DOUBAO_VOICE=en_female_zendaya_p1_uranus_bigtts
+FISH_API_KEY=你的FishAudio密钥
+FISH_MODEL=s2.1-pro-free
+FISH_REFERENCE_ID=a18851e0129d4a43bf7589961cb6f300
 ```
 
-只有 `DEEPSEEK_API_KEY` 和 `DOUBAO_API_KEY` 必填。豆包使用新版语音控制台「API Key 管理」中的 Key，无需 AppID。默认资源是 `seed-tts-2.0`，默认音色 Zendaya 是美式英语女声。资源和音色均可省略，服务端会采用默认值。
+`DEEPSEEK_API_KEY` 和 `FISH_API_KEY` 必填。Fish Audio 模型和音色可省略，默认使用 `s2.1-pro-free` 和适合教学朗读的美式英语女声 Jessica。Fish 公布的当前免费窗口截至 2026 年 11 月 30 日，后续以官方页面为准。[Fish Audio 开发者页面](https://fish.audio/developers/) · [Jessica 音色](https://fish.audio/m/a18851e0129d4a43bf7589961cb6f300/)
 
 - 页面：[http://localhost:5173](http://localhost:5173)
 - 后端：[http://127.0.0.1:8787](http://127.0.0.1:8787)。开发时页面请求 `/v1`，由 Vite 代理给后端。
@@ -63,7 +63,7 @@ DeepSeek：HTTP 200，且控制台显示 `choices[0].message.content` 的回复�
 }
 ```
 
-豆包语音：HTTP 200、类型 `audio/mpeg`，并能听到英文朗读，即表示成功。如果浏览器拦截播放，可以点击插入页面的音频控件播放。
+Fish Audio 成功合成时返回 HTTP 200 和 `audio/mpeg`。如果浏览器拦截播放，可以点击页面中的音频控件。
 
 ```js
 {
@@ -87,9 +87,9 @@ DeepSeek：HTTP 200，且控制台显示 `choices[0].message.content` 的回复�
 }
 ```
 
-接口错误统一为 `{ "error": { "message": "原因", "code": "错误类型", "retryable": true, "service": "服务名称" } }`；区分 Key 无效、余额不足、权限、限流、网络和超时。参数错误返回 400，上游网络、HTTP 或业务错误返回 502。请求体上限为 1MB。V3 文档未明确数字形式的文本上限，超出上游限制时返回服务的简短原因。
+接口错误统一为 `{ "error": { "message": "原因", "code": "错误类型", "retryable": true, "service": "服务名称" } }`，区分 Key 无效、额度不足、权限、限流、网络和超时。参数错误返回 400，上游错误返回 502，请求体上限为 1MB。
 
-服务端使用豆包 V3 HTTP 接口，收齐并解码音频片段后向浏览器返回一个完整 MP3。前端仍调用 `/v1/audio/speech`，不需要处理流式协议。
+服务端调用 Fish Audio 的 `/v1/tts`，通过 Bearer Key 鉴权，使用 `model` 请求头和 `reference_id` 指定模型和音色，再把 MP3 返回给 `/v1/audio/speech` 的调用方。[Fish Audio TTS 接口](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech)
 
 ## 构建与本地检查
 
@@ -127,7 +127,6 @@ pnpm run test:browser
 ## 相对于原技术方案的接口更新
 
 - DeepSeek 原默认模型 `deepseek-chat` 已停用，改为当前 `deepseek-flash`，模型仍可通过 `.env` 修改。[官方模型调用说明](https://api-docs.deepseek.com/quick_start/)、[旧模型停用公告](https://api-docs.deepseek.com/news/news260424/)。
-- 豆包使用支持新版 API Key 的 V3，使用 `X-Api-Key`、`X-Api-Resource-Id` 和 `X-Api-Request-Id`，无需旧版 AppID/Token/Cluster；前端输入输出格式保持原方案约定。`code=0` 的音频逐片合并，`code=20000000` 结束帧作为成功处理。原 V1 的 1024 字节限制不再沿用。[V3 官方文档](https://docs.volcengine.com/docs/doubao-voice/unidirectional-streaming-text-to-speech-http?lang=zh)、[完整分帧说明](https://docs.volcengine.com/docs/doubao-voice/http-chunked-sse-unidirectional-streaming-v3?lang=zh)、[官方音色表](https://docs.volcengine.com/docs/DoubaoVoice/Tonelist-1?lang=zh)。
 
 ## 开源许可证
 

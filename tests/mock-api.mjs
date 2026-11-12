@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import { setTimeout as wait } from 'node:timers/promises';
 import { createApp } from '../server.js';
 
 const audio = await readFile(new URL('./fixtures/short.mp3', import.meta.url));
 const calls = new Map();
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function upstream(url, options) {
   const body = JSON.parse(options.body);
   if (url.includes('chat/completions')) {
@@ -30,14 +30,18 @@ async function upstream(url, options) {
     }
     return Response.json({ choices: [{ message: { content: '每天读一段，认真听每一句。' } }] });
   }
-  const text = body.req_params.text;
+  const { text, format, reference_id: referenceId } = body;
+  if (url !== 'https://api.fish.audio/v1/tts' || options.method !== 'POST'
+    || typeof text !== 'string' || !text.trim() || format !== 'mp3' || typeof referenceId !== 'string' || !referenceId) {
+    return Response.json({ message: '无效的模拟 Fish Audio 请求' }, { status: 400 });
+  }
   const key = `audio:${text}`;
   calls.set(key, (calls.get(key) || 0) + 1);
-  await wait(text.includes('Slow') ? 2500 : 250);
+  await wait(text.includes('Slow') ? 2500 : 250, undefined, { signal: options.signal });
   if (text.includes('Invalid key audio')) return Response.json({ error: { message: 'Invalid API key' } }, { status: 401 });
   if (text.includes('No balance audio')) return Response.json({ message: 'insufficient balance' }, { status: 402 });
-  if (text.includes('Fail audio') && calls.get(key) <= 3) return Response.json({ code: 45000000, message: '测试音频失败' });
-  return new Response(JSON.stringify({ code: 0, data: audio.toString('base64') }) + '\n' + JSON.stringify({ code: 20000000 }), { headers: { 'Content-Type': 'application/json' } });
+  if (text.includes('Fail audio') && calls.get(key) <= 3) return Response.json({ message: '测试音频失败' }, { status: 503 });
+  return new Response(audio, { headers: { 'Content-Type': 'audio/mpeg' } });
 }
-createApp({ DEEPSEEK_API_KEY: 'qa-placeholder', DOUBAO_API_KEY: 'qa-placeholder' }, upstream)
+createApp({ DEEPSEEK_API_KEY: 'qa-placeholder', FISH_API_KEY: 'qa-placeholder' }, upstream)
   .listen(8790, '127.0.0.1', () => console.log('隔离测试服务 http://127.0.0.1:8790（模拟上游）'));

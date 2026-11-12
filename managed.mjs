@@ -51,9 +51,9 @@ async function initialize(message) {
     process.chdir(process.env.APP_TEMP_DIR);
     const { createApp } = await import('./server.js');
     server = createApp(
-      { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, DOUBAO_API_KEY: process.env.DOUBAO_API_KEY,
-        DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL, DOUBAO_RESOURCE_ID: process.env.DOUBAO_RESOURCE_ID,
-        DOUBAO_VOICE: process.env.DOUBAO_VOICE },
+      { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, DEEPSEEK_MODEL: process.env.DEEPSEEK_MODEL,
+        FISH_API_KEY: process.env.FISH_API_KEY, FISH_MODEL: process.env.FISH_MODEL,
+        FISH_REFERENCE_ID: process.env.FISH_REFERENCE_ID },
       fetch,
       { managed: { instanceId, token: message.token } });
     if (stopping) return;

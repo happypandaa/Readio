@@ -35,16 +35,28 @@
         ]
       },
       {
-        "name": "DOUBAO_API_KEY",
-        "label": "豆包语音 API Key",
+        "name": "FISH_API_KEY",
+        "label": "Fish Audio API Key",
         "type": "string",
         "required": true,
         "secret": true,
-        "description": "用于逐句英文朗读，调用火山引擎豆包语音 V3。",
+        "description": "用于逐句英文朗读，默认音色为 Jessica。",
         "howToGet": [
-          "打开火山引擎语音控制台的「API Key 管理」",
+          "打开 Fish Audio 的 API Keys 页面",
           "创建一个 API Key 并复制"
-        ]
+        ],
+        "helpUrl": "https://fish.audio/app/api-keys/"
+      },
+      {
+        "name": "FISH_MODEL",
+        "label": "Fish Audio 模型（选填）",
+        "type": "string",
+        "required": false,
+        "secret": false,
+        "description": "留空使用 s2.1-pro-free。需要使用付费模型时可填写 s2.1-pro。",
+        "placeholder": "s2.1-pro-free",
+        "howToGet": ["可在 Fish Audio 的接口文档中查看支持的模型 ID。"],
+        "helpUrl": "https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech"
       }
     ]
   },
