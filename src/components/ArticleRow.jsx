@@ -11,7 +11,7 @@ export function ArticleStatus({ article, audios = [], sentences }) {
   return <p className="row-meta num">{status}</p>;
 }
 
-export default function ArticleRow({ article, onOpen }) {
+export default function ArticleRow({ article, onOpen, onStudy }) {
   const data = useLiveQuery(async () => {
     const [sentences, audios] = await Promise.all([
       db.sentences.where('articleId').equals(article.id).sortBy('idx'),
@@ -19,6 +19,7 @@ export default function ArticleRow({ article, onOpen }) {
     ]);
     return { sentences, audios };
   }, [article.id]);
+  const studyLabel = article.finished ? '重新学习' : article.lastStudiedAt != null ? '继续学习' : '开始学习';
   return <li className="row">
     <div className="row-main" role="button" tabIndex={0} onClick={() => onOpen(article.id)} onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
@@ -28,5 +29,8 @@ export default function ArticleRow({ article, onOpen }) {
       <p className="row-prev">{data?.sentences.map(sentence => sentence.text).join(' ')}</p>
       <ArticleStatus article={article} audios={data?.audios} sentences={data?.sentences} />
     </div>
+    <button type="button" className="btn ghost sm row-study" aria-label={`${studyLabel}：${article.title}`} onClick={() => onStudy(article.id)}>
+      {studyLabel}
+    </button>
   </li>;
 }

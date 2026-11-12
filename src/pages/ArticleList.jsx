@@ -45,6 +45,10 @@ export default function ArticleList() {
   const views = { sentences: 'full', words: 'full', ...data?.settings.favView };
   const compact = views[tab] === 'compact';
   const ids = new Set(data?.articles.map(article => article.id));
+  function openStudy(id) {
+    stop();
+    location.hash = `#/study/${id}`;
+  }
   async function selectTab(next) {
     stop();
     try { await setSetting('lastTab', next); }
@@ -92,7 +96,7 @@ export default function ArticleList() {
       </div>
       <section id="listBody" role="tabpanel" aria-labelledby={`tab-${tab}`} aria-busy={!data}>
         {data && !data[tab].length ? <Empty title={empty[tab][0]} description={empty[tab][1]} onAdd={tab === 'articles' ? () => setAdding(true) : null} />
-          : data && tab === 'articles' ? <ul className="list">{data.articles.map(article => <ArticleRow key={article.id} article={article} onOpen={id => { stop(); setArticleId(id); }} />)}</ul>
+          : data && tab === 'articles' ? <ul className="list">{data.articles.map(article => <ArticleRow key={article.id} article={article} onOpen={id => { stop(); setArticleId(id); }} onStudy={openStudy} />)}</ul>
             : data && tab === 'sentences' ? <div className="list">{data.sentences.map(item => <SavedSentenceItem key={item.id} item={item} articleExists={ids.has(item.articleId)} compact={compact} expanded={expanded.has(`s:${item.id}`)} onToggle={() => toggle(`s:${item.id}`)} />)}</div>
               : data && <div className="list">{data.words.map(item => <SavedWordItem key={item.id} item={item} articleExists={ids.has(item.articleId)} compact={compact} expanded={expanded.has(`w:${item.id}`)} onToggle={() => toggle(`w:${item.id}`)} />)}</div>}
       </section>

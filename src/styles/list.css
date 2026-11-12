@@ -20,8 +20,9 @@
 
 .list { list-style: none; margin: 0; padding: 0 0 80px; }
 .row { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid var(--line); }
-.row-main { flex: 1; min-width: 0; text-align: left; padding: 18px 10px; margin: 0 -10px; border-radius: var(--r-md); cursor: pointer; }
+.row-main { flex: 1; min-width: 0; text-align: left; padding: 18px 10px; margin-left: -10px; border-radius: var(--r-md); cursor: pointer; }
 .row-main:hover { background: var(--hover); }
+.row-study { flex: none; margin-top: 18px; }
 .row-title {
   font-family: var(--font-en); font-size: 21px; font-weight: 600; line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0 0 4px;

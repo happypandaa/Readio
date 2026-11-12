@@ -216,13 +216,15 @@ function StudyContent({ entry }) {
     edit(setCollapsed, wasOpen && showAll);
     if (!wasOpen) void requestTranslation(index);
   };
-  const toggleShowAll = () => {
+  const showTranslations = value => {
     setExpanded(new Set());
     setCollapsed(new Set());
-    setSetting('showTranslations', !showAll).catch(error => toast(errorMessage(error)));
+    if (value !== showAll) setSetting('showTranslations', value).catch(error => toast(errorMessage(error)));
   };
   const translateRest = async () => {
-    if (batch.running) return;
+    if (batchController.current) return;
+    showTranslations(true);
+    if (data.sentences.every(sentence => sentence.zh)) return;
     const controller = new AbortController();
     batchController.current = controller;
     setBatch({ running: true, failed: 0 });
@@ -233,10 +235,15 @@ function StudyContent({ entry }) {
       if (batchController.current !== controller) return;
       setBatch({ running: false, failed: 0 });
       if (error.name !== 'AbortError') toast(errorMessage(error));
+    } finally {
+      if (batchController.current === controller) batchController.current = null;
     }
   };
   const stopTranslating = () => { batchController.current?.abort(); };
-  useEffect(() => () => batchController.current?.abort(), []);
+  useEffect(() => () => {
+    batchController.current?.abort();
+    batchController.current = null;
+  }, []);
   const toggleSave = async index => {
     if (!data?.article || saving.current.has(index)) return;
     const sentence = data.sentences.find(item => item.idx === index);
@@ -281,13 +288,18 @@ function StudyContent({ entry }) {
       <div className="wrap bar">
         <button className="back" id="backBtn" aria-label="返回文章列表" onClick={() => { location.hash = '#/'; }}><Icon name="back" /><span>返回</span></button>
         <div className="s-title" id="studyTitle">{data.article.title}</div>
-        <div className="s-tools"><button className={`tr-toggle${showAll ? ' on' : ''}`} aria-pressed={showAll}
-          title={showAll ? '隐藏译文' : '显示已有译文'} onClick={toggleShowAll}>译文</button></div>
+        <div className="s-tools">
+          <button className={`tr-toggle${showAll ? ' on' : ''}`} aria-pressed={showAll}
+            title={showAll ? '隐藏译文' : '显示已有译文'} onClick={() => showTranslations(!showAll)}>译文</button>
+          <button className="btn primary sm" disabled={batch.running} onClick={translateRest}>
+            {batch.running ? '翻译中…' : '全篇翻译'}
+          </button>
+        </div>
       </div>
     </header>
     <article className="wrap doc">
       <AudioGenerationStatus article={data.article} audios={data.audios} sentences={data.sentences} />
-      {showAll && <TranslationBar sentences={data.sentences} running={batch.running} failed={batch.failed}
+      {(showAll || batch.running) && <TranslationBar sentences={data.sentences} running={batch.running} failed={batch.failed}
         onTranslate={translateRest} onStop={stopTranslating} />}
       <h1 className="doc-title" id="docTitle" lang="en">{data.article.title}</h1>
       <ArticleText sentences={data.sentences} current={player.cur} active={active} flash={flash}
